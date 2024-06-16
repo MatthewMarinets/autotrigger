@@ -1,0 +1,15 @@
+{
+    "$schema": "https://json-schema.org/draft-07/schema",
+    "title": "Configuration for autotrigger",
+    "type": "object",
+    "properties": {
+        "native": {
+            "description": "The location of the nativelib.triggerlib file",
+            "type": "string"
+        },
+        "native_triggerstrings": {
+            "description": "The location of the native triggerstrings.txt file",
+            "type": "string"
+        }
+    }
+}

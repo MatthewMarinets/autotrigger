@@ -1,6 +1,6 @@
 
 import sys
-from autotrigger import ElementType, TriggerElement, TriggerObjects, codegen_trigger
+from autotrigger import ElementType, TriggerElement, TriggerLib, codegen_trigger
 
 
 class ConsoleColours:
@@ -47,7 +47,7 @@ def print_help() -> None:
     print('exit')
 
 
-def element_abspath(element: TriggerElement, data: TriggerObjects) -> str:
+def element_abspath(element: TriggerElement, data: TriggerLib) -> str:
     result: list[str] = []
     while element.element_id != 'root':
         result.append(data.id_to_string.get(element.element_id, element.element_id))
@@ -56,7 +56,7 @@ def element_abspath(element: TriggerElement, data: TriggerObjects) -> str:
     return '/'.join(reversed(result))
 
 
-def path_to_obj(path: str, start: TriggerElement, data: TriggerObjects) -> tuple[str, TriggerElement]:
+def path_to_obj(path: str, start: TriggerElement, data: TriggerLib) -> tuple[str, TriggerElement]:
     if not path:
         return ('No path provided', start)
     current = start
@@ -84,7 +84,7 @@ def path_to_obj(path: str, start: TriggerElement, data: TriggerObjects) -> tuple
     return ('', current)        
 
 
-def interactive(data: TriggerObjects) -> None:
+def interactive(data: TriggerLib) -> None:
 
     running = True
     current_id = 'root'
