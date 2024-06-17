@@ -56,7 +56,6 @@ _type_pattern = re.compile(r'Type="(\w+)"')
 _id_pattern = re.compile(r'\bId="([0-9A-F]{8})"')
 _library_id_pattern = re.compile(r'Library="(\w+)" Id="([0-9A-F]{8})"')
 _type_lib_id_pattern = re.compile(r'Type="(\w+)" Library="(\w+)" Id="([0-9A-F]{8})"')
-_function_def_id_pattern = re.compile(r'^<FunctionDef Type="FunctionDef" Library="(\w+)" Id="([0-9A-F]{8})"/>')
 
 class TriggerElement:
     __slots__ = (
@@ -114,18 +113,30 @@ class TriggerElement:
         return str(self)
     
     def __hash__(self) -> int:
-        return hash((self.element_id, self.type))
+        return hash((self.element_id, self.type, self.library))
     def __eq__(self, other) -> bool:
         return (
-            isinstance(other, TriggerElement)
-            and self.element_id == other.element_id
+            self.element_id == other.element_id
             and self.type == other.type
+            and self.library == other.library
         )
 
 
 class TriggerLib:
-    def __init__(self) -> None:
-        self.library = ''
+    __slots__ = (
+        'library',
+        'name',
+        'objects',
+        'trigger_strings',
+        'id_to_string',
+        'children',
+        'parents',
+        'dependencies',
+        'keyword_parameters',
+    )
+    def __init__(self, name: str) -> None:
+        self.library: str = ''
+        self.name = name
         self.objects: dict[tuple[str, ElementType], TriggerElement] = {}
         self.trigger_strings: dict[str, str] = {}
         self.id_to_string: dict[tuple[str, ElementType], str] = {}
@@ -255,54 +266,14 @@ class TriggerLib:
                 continue
             parameters = [child for child in self.children[element] if child.type == ElementType.ParamDef]
             assert element not in self.keyword_parameters
-            self.keyword_parameters[element] = {parameter.get_inline_value('Identifier'): parameter for parameter in parameters}
+            self.keyword_parameters[element] = {parameter.get_inline_value('Identifier'): parameter for parameter in parameters}  # type: ignore
             assert None not in self.keyword_parameters[element]
-
-    def _sort_elements(self) -> list[TriggerElement]:
-        child_order: list[TriggerElement] = []
-        root_element = self.objects['root', ElementType.Root]
-        search_stack = deque([root_element])
-        while search_stack:
-            new_node = search_stack.pop()
-            if new_node not in child_order:
-                child_order.append(new_node)
-                children = self.children.get(new_node, [])
-                child_filter: list[ElementType] = []
-                if new_node.type not in (ElementType.Category, ElementType.Root):
-                    child_filter.extend([ElementType.Trigger, ElementType.FunctionDef])
-                if new_node.type != ElementType.FunctionDef:
-                    child_filter.append(ElementType.ParamDef)
-                if child_filter:
-                    children = [
-                        child for child in children
-                        if child.type not in child_filter
-                    ]
-                search_stack.extend(reversed(children))
-
-        child_index = {x: index for index, x in enumerate(child_order)}
-        child_index[root_element] = -1
-        return sorted(self.objects.values(), key=lambda x: child_index[x])
-
-    def write_triggers(self, triggers_file: str = TRIGGERS_FILE) -> None:
-        sorted_elements = self._sort_elements()
-        with open(triggers_file, 'w') as fp:
-            def _print(string: str, indent_level: int = 0) -> None:
-                print((' ' * (4 * indent_level)) + string, file=fp)
-            _print('<?xml version="1.0" encoding="utf-8"?>')
-            _print('<TriggerData>')
-            _print(f'<Library Id="{self.library}">', 1)
-            for obj in sorted_elements:
-                indent_level = 2
-                for line in obj.lines:
-                    this_indent_level, indent_level = get_indentation(line, indent_level)
-                    _print(line, this_indent_level)
-                assert indent_level == 2
-
-            _print('</Library>', 1)
-            fp.write('</TriggerData>')
 
 
 class RepoObjects:
+    __slots__ = (
+        'libs', 'libs_by_name'
+    )
     def __init__(self) -> None:
         mods = [
             'ArchipelagoTriggers',
@@ -310,18 +281,18 @@ class RepoObjects:
             'ArchipelagoPlayer',
             'ArchipelagoPatches',
         ]
-        file_paths = [
-            (f'{MODS_FOLDER}/{x}.SC2Mod/Triggers', f'{MODS_FOLDER}/{x}.SC2Mod/enUS.SC2Data/LocalizedData/TriggerStrings.txt')
-            for x in mods
+        libs = [TriggerLib('Native').parse(config['native'], config['native_triggerstrings'])] + [
+            TriggerLib(name).parse(
+                f'{MODS_FOLDER}/{name}.SC2Mod/Triggers',
+                f'{MODS_FOLDER}/{name}.SC2Mod/enUS.SC2Data/LocalizedData/TriggerStrings.txt'
+            )
+            for name in mods
         ]
-        mods.append('Native')
-        file_paths.append((config['native'], config['native_triggerstrings']))
-        libs = [TriggerLib().parse(triggers_file, trigger_strings_file) for triggers_file, trigger_strings_file in file_paths]
         self.libs = {
             lib.library: lib
             for lib in libs
         }
-        self.libs_by_name = dict(zip(mods, libs))
+        self.libs_by_name = {lib.name: lib for lib in libs}
 repo_objects = RepoObjects()
 
 
@@ -371,6 +342,59 @@ def indent_lines(lines: list[str], indent: int = 0) -> tuple[int, list[str]]:
         this_indent, indent = get_indentation(line, indent)
         result.append(('    '*this_indent) + line)
     return indent, result
+
+
+def _sort_elements(lib: TriggerLib) -> list[TriggerElement]:
+    child_order: dict[TriggerElement, int] = {}
+    root_element = lib.objects['root', ElementType.Root]
+    search_stack = deque([root_element])
+    while search_stack:
+        new_node = search_stack.pop()
+        if new_node not in child_order:
+            child_order[new_node] = len(child_order)
+            children = lib.children.get(new_node, [])
+            child_filter: list[ElementType] = []
+            if new_node.type not in (ElementType.Category, ElementType.Root):
+                child_filter.extend([ElementType.Trigger, ElementType.FunctionDef])
+            if new_node.type != ElementType.FunctionDef:
+                child_filter.append(ElementType.ParamDef)
+            if child_filter:
+                children = [
+                    child for child in children
+                    if child.type not in child_filter
+                ]
+            search_stack.extend(reversed(children))
+
+    child_order[root_element] = -1
+    return sorted(lib.objects.values(), key=lambda x: child_order[x])
+
+
+def write_triggers_xml(lib: TriggerLib, triggers_file: str = TRIGGERS_FILE) -> None:
+    sorted_elements = _sort_elements(lib)
+    with open(triggers_file, 'w') as fp:
+        def _print(string: str, indent_level: int = 0) -> None:
+            print((' ' * (4 * indent_level)) + string, file=fp)
+        _print('<?xml version="1.0" encoding="utf-8"?>')
+        _print('<TriggerData>')
+        _print(f'<Library Id="{lib.library}">', 1)
+        for obj in sorted_elements:
+            indent_level = 2
+            for line in obj.lines:
+                this_indent_level, indent_level = get_indentation(line, indent_level)
+                _print(line, this_indent_level)
+            assert indent_level == 2
+
+        _print('</Library>', 1)
+        fp.write('</TriggerData>')
+
+
+def write_triggers_strings(lib: TriggerLib, triggers_file: str) -> None:
+    lines = sorted(['='.join(line_parts) for line_parts in lib.trigger_strings.items()])
+    with open(triggers_file, 'w') as fp:
+        def _print(string: str, indent_level: int = 0) -> None:
+            print((' ' * (4 * indent_level)) + string, file=fp)
+        for line in lines:
+            _print(line)
 
 
 _type_map = {
@@ -552,7 +576,6 @@ def codegen_parameter(element: TriggerElement, auto_variables: AutoVarBuilder) -
     _value_pattern = re.compile(r'^<(ValueType|ValueId) (Type|Id)="(\w+)"')
     _variable_pattern = re.compile(r'^<Variable Type="Variable" Library="(\w+)" Id="([0-9A-F]{8})"/>')
     _array_pattern = re.compile(r'<Array Type="Param" Library="(\w+)" Id="([0-9A-F]{8})"/>')
-    _value_element_pattern = re.compile(r'^<ValueElement Type="(Trigger|Preset)" Library="(\w+)" Id="([0-9A-F]{8})"/>')
     _function_call_pattern = re.compile(r'^<FunctionCall Type="FunctionCall" Library="(\w+)" Id="([0-9A-F]{8})"/>')
     _preset_pattern = re.compile(r'^<Preset Type="PresetValue" Library="(\w+)" Id="([0-9A-F]{8})"/>')
     in_script_code = False
@@ -594,26 +617,22 @@ def codegen_parameter(element: TriggerElement, auto_variables: AutoVarBuilder) -
             result = codegen_function_call(function_call_element, auto_variables)
             assert len(result) == 1
             return result[0]
-        elif m := re.match(_value_element_pattern, line):
-            element_type, lib_id, element_id = m.groups()
-            if element_type == ElementType.Trigger:
-                lib = repo_objects.libs[lib_id]
-                return trigger_name(lib, lib.objects[element_id, ElementType(element_type)])
-            elif element_type == ElementType.Preset:
-                lib = repo_objects.libs[lib_id]
-                preset_element = lib.objects[element_id, element_type]
+        elif line.startswith('<ValueElement'):
+            lib, value_element = get_referenced_element(line)
+            if value_element.type == ElementType.Trigger:
+                return trigger_name(lib, value_element)
+            elif value_element.type == ElementType.Preset:
                 if value_preset_line := element.get_first_line_of_tag('ValuePreset'):
-                    m = _type_lib_id_pattern.search(value_preset_line)
-                    assert m is not None
-                    assert m.group(1) == ElementType.PresetValue
-                    return preset_value(repo_objects.libs[m.group(2)], repo_objects.libs[m.group(2)].objects[m.group(3), ElementType.PresetValue])
-                elif base_type := preset_element.get_attribute('BaseType', 'Value'):
+                    preset_value_lib, preset_value_element = get_referenced_element(value_preset_line)
+                    assert preset_value_element.type == ElementType.PresetValue
+                    return preset_value(preset_value_lib, preset_value_element)
+                elif base_type := value_element.get_attribute('BaseType', 'Value'):
                     default_result = tables.default_return_values.get(base_type)
                     if default_result:
                         return default_result
-                return escape_identifier(lib.trigger_strings[f'{element_type}/Name/lib_{lib_id}_{element_id}'])
+                return escape_identifier(lib.trigger_strings[f'{value_element.type}/Name/lib_{value_element.library}_{value_element.element_id}'])
             else:
-                assert False, f"Don't know how to handle ValueElement of type {m.group(1)}"
+                assert False, f"Don't know how to handle ValueElement of type {value_element.type}"
         elif m := re.match(_preset_pattern, line):
             lib_id = m.group(1)
             preset_id = m.group(2)
@@ -721,11 +740,7 @@ def is_variable_parameter_constant(element: TriggerElement) -> str|None:
     if value := element.get_inline_value('Value'):
         return value
     if variable_line := element.get_first_line_of_tag('Variable'):
-        m = _type_lib_id_pattern.search(variable_line)
-        assert m
-        variable_element_type, variable_lib_id, variable_element_id = m.groups()
-        variable_element_lib = repo_objects.libs[variable_lib_id]
-        variable_element = variable_element_lib.objects[variable_element_id, variable_element_type]
+        variable_element_lib, variable_element = get_referenced_element(variable_line)
         if '<Constant/>' not in variable_element.lines:
             return None
         return variable_name(variable_element_lib, variable_element)
@@ -876,7 +891,7 @@ def codegen_function_call(
         elif paramdef_type == 'sameas':
             same_as_line = paramdef_element.get_first_line_of_tag('TypeElement')
             assert same_as_line
-            same_as_element = get_referenced_element(same_as_line)
+            _, same_as_element = get_referenced_element(same_as_line)
             assert identifier in param_identifier_to_element
             param_identifier_to_type_element[identifier] = same_as_element
         else:
@@ -935,12 +950,16 @@ def codegen_function_call(
                             parent = repo_objects.libs[parent.library].parents[parent]
                         function_def_lib_id = parent.get_attribute('FunctionDef', 'Library')
                         parent_function_def_id = parent.get_attribute('FunctionDef', 'Id')
+                        assert function_def_lib_id
+                        assert parent_function_def_id
                         parent_function_def = repo_objects.libs[function_def_lib_id].objects[parent_function_def_id, ElementType.FunctionDef]
                     auto_var_element_id = parent.element_id
                 elif macro_args[1] == 'parent':
                     paramdef_identifier = macro_args[0]
                     parent = data.parents[element]
-                    parent_functiondef_lib, parent_functiondef_element = get_referenced_element(parent.get_first_line_of_tag('FunctionDef'))
+                    parent_function_def_line = parent.get_first_line_of_tag('FunctionDef')
+                    assert parent_function_def_line
+                    parent_functiondef_lib, parent_functiondef_element = get_referenced_element(parent_function_def_line)
                     if paramdef_identifier == 'val':
                         # Note(mm): this deals specifically with Switch statements.
                         # Technically to be entirely correct, we'd preprocess all the scriptcode blocks to link the
@@ -962,8 +981,8 @@ def codegen_function_call(
                 assert len(macro_args) == 2
                 auto_var_name = f'auto{auto_var_element_id}_{macro_args[0]}'
                 parameter_element = param_identifier_to_element[macro_args[1]]
-                auto_var_type = codegen_parameter_type(parameter_element)
-                auto_var_type = _type_map.get(auto_var_type, auto_var_type) or 'int'
+                auto_var_type = codegen_parameter_type(parameter_element) or 'int'
+                auto_var_type = _type_map.get(auto_var_type, auto_var_type)
                 constant_initializer = is_variable_parameter_constant(parameter_element)
                 auto_variables.append(AutoVariable(auto_var_name, auto_var_type, constant=constant_initializer))
                 if constant_initializer is None:
@@ -1050,8 +1069,9 @@ def parse_return_type(element: TriggerElement) -> str:
     return 'void'
 
 
-def codegen_function_def(data: TriggerLib, element: TriggerElement, indent: int = 0) -> str:
+def codegen_function_def(data: TriggerLib, element: TriggerElement) -> str:
     result: list[str] = []
+    indent = 0
     assert element.type == ElementType.FunctionDef
     parameters = [child for child in data.children[element] if child.type == ElementType.ParamDef]
     functions = [child for child in data.children[element] if child.type == ElementType.FunctionCall]
@@ -1060,6 +1080,7 @@ def codegen_function_def(data: TriggerLib, element: TriggerElement, indent: int 
     return_type = parse_return_type(element)
     if return_type == 'preset':
         type_element_line = element.get_first_line_of_tag('TypeElement')
+        assert type_element_line
         _, preset_element = get_referenced_element(type_element_line)
         assert preset_element.type == ElementType.Preset
         return_type = preset_backing_type(preset_element)
@@ -1068,7 +1089,7 @@ def codegen_function_def(data: TriggerLib, element: TriggerElement, indent: int 
         return ''
 
     parameter_types_names = [(get_variable_type(parameter), parameter_name(data, parameter)) for parameter in parameters]
-    trigger_vars: list[str] = []
+    trigger_vars: list[tuple[str, str]] = []
     if '<FlagCreateThread/>' in element.lines:
         trigger_basename = f'auto_{this_function_name}'
         trigger_name = f'{trigger_basename}_Trigger'
@@ -1292,15 +1313,18 @@ def codegen_library(data: TriggerLib) -> str:
     return '\n'.join(result)
 
 
-
 if __name__ == '__main__':
-    # from scripts.at.interactive import interactive
+    import sys
     ap_triggers = repo_objects.libs_by_name['ArchipelagoTriggers']
     ap_player = repo_objects.libs_by_name['ArchipelagoPlayer']
-    with open('aptriggers.log', 'w') as fp:
-        print(codegen_library(ap_triggers), file=fp)
-    with open('applayer.log', 'w') as fp:
-        print(codegen_library(ap_player), file=fp)
-    # interactive(triggers)
-    # triggers.write_triggers('test.xml')
+    if '-i' in sys.argv:
+        from scripts.at.interactive import interactive
+        interactive(repo_objects)
+    else:
+        with open('aptriggers.log', 'w') as fp:
+            print(codegen_library(ap_triggers), file=fp)
+        with open('applayer.log', 'w') as fp:
+            print(codegen_library(ap_player), file=fp)
+        write_triggers_xml(ap_triggers, 'aptriggers.xml')
+        write_triggers_strings(ap_triggers, 'aptriggerstrings.txt')
 
