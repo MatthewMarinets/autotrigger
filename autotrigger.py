@@ -1031,6 +1031,7 @@ def codegen_library(data: TriggerLib) -> str:
 
 if __name__ == '__main__':
     import sys
+    import os
     ap_triggers = repo_objects.libs_by_name['ArchipelagoTriggers']
     ap_player = repo_objects.libs_by_name['ArchipelagoPlayer']
     from scripts.at import add_funcs, interactive
@@ -1048,10 +1049,11 @@ if __name__ == '__main__':
     if '-i' in sys.argv:
         interactive.interactive(repo_objects)
     else:
-        with open('aptriggers.log', 'w') as fp:
+        os.makedirs('out', exist_ok=True)
+        with open('out/aptriggers.log', 'w') as fp:
             print(codegen_library(ap_triggers), file=fp)
-        with open('applayer.log', 'w') as fp:
+        with open('out/applayer.log', 'w') as fp:
             print(codegen_library(ap_player), file=fp)
-        write_triggers_xml(ap_triggers, 'aptriggers.xml')
-        write_triggers_strings(ap_triggers, 'aptriggerstrings.txt')
+        write_triggers_xml(ap_triggers, 'out/aptriggers.xml')
+        write_triggers_strings(ap_triggers, 'out/aptriggerstrings.txt')
 

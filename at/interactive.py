@@ -1,8 +1,9 @@
 
 import sys
+import os
 from .. import autotrigger as at
 from . import add_funcs
-from .parse_triggers import ElementType, TriggerElement, RepoObjects
+from .parse_triggers import ElementType, TriggerElement, TriggerLib, RepoObjects
 
 
 class ConsoleColours:
@@ -47,6 +48,7 @@ def print_help() -> None:
     print('gen - generate the galaxy code for the element')
     print('xml - display the xml lines for the element')
     print('add - add a function def or function call as a child to the current element')
+    print('write - write the .galaxy, .xml, and trigger strings to a specified directory')
     print('help')
     print('exit')
 
@@ -98,6 +100,108 @@ def path_to_obj(path: str, start: TriggerElement, data: at.TriggerLib) -> tuple[
     return ('', current)        
 
 
+def cmd_ls(command: list[str], lib: TriggerLib, element: TriggerElement) -> None:
+    if len(command) > 2:
+        print(f'ls takes up to 1 argument, {len(command) - 1} given')
+        return
+    elif len(command) == 2:
+        error_msg, search_element = path_to_obj(command[1], element, lib)
+        if error_msg:
+            print(error_msg)
+            return
+    else:
+        search_element = element
+    print(f'Contents of {element_name(lib, search_element)} ({search_element})')
+    parent = lib.parents[search_element]
+    child_names = [(element_name(lib, child), child) for child in lib.children.get(search_element, [])]
+    name_width = max((len(name[0]) for name in child_names), default=1) + 2
+    print(f'.. {" ":{name_width}} ({parent})')
+    for child_index, (child_name, child) in enumerate(child_names):
+        print(f'{child_index:>2} {child_name:<{name_width}} ({child})')
+
+
+def cmd_gen(command: list[str], lib: TriggerLib, element: TriggerElement) -> None:
+    if len(command) > 1:
+        error_msg, search_element = path_to_obj(command[1], element, lib)
+        if error_msg:
+            print(error_msg)
+            return
+    else:
+        search_element = element
+    if search_element.type == ElementType.Trigger:
+        print('===triggers are WIP===')
+        print(at.codegen_trigger(lib, search_element))
+    elif search_element.type == ElementType.FunctionDef:
+        print(at.codegen_function_def(lib, search_element))
+    elif search_element.type == ElementType.FunctionCall:
+        lines = at.codegen_function_call(search_element, at.AutoVarBuilder([]))
+        indent = 0
+        for line in lines:
+            this_indent, indent = at.get_indentation(line, indent)
+            print(('    ' * this_indent) + line)
+    elif search_element.type == ElementType.Variable:
+        for line in at.codegen_variable_init(search_element):
+            print(line)
+    elif search_element.type == ElementType.Param:
+        print(at.codegen_parameter(search_element, at.AutoVarBuilder([])))
+    elif search_element.type == ElementType.PresetValue:
+        print(at.preset_value(lib, search_element))
+    else:
+        print(f'Unable to codegen type of {element_name(lib, search_element)} ({search_element})')
+
+
+def cmd_xml(command: list[str], lib: TriggerLib, element: TriggerElement) -> None:
+    if len(command) > 1:
+        error_msg, search_element = path_to_obj(command[1], element, lib)
+        if error_msg:
+            print(error_msg)
+            return
+    else:
+        search_element = element
+    print(element_name(lib, search_element))
+    indent_level = 0
+    for line in search_element.lines:
+        this_indent_level, indent_level = at.get_indentation(line, indent_level)
+        print(('   ' * this_indent_level) + line)
+
+
+def cmd_add(command: list[str], lib: TriggerLib, element: TriggerElement) -> None:
+    funcs_help = [f'{function_name}({", ".join(arg_info)})' for function_name, (_, arg_info) in add_funcs.ADD_FUNCS.items()]
+    if len(command) < 2:
+        print('Must specify a function type to add')
+        print(f'Implemented operations are: {", ".join(funcs_help)}')
+        return
+    add_func_info = add_funcs.ADD_FUNCS.get(command[1])
+    if add_func_info is None:
+        print(f'Unrecognized add operation "{command[1]}"')
+        print(f'Implemented operations are: {", ".join(funcs_help)}')
+        return
+    add_function, arg_info = add_func_info
+    if len(command) - 2 != len(arg_info):
+        print(f'Wrong number of args specified for {command[1]}: takes {len(arg_info)}, got {len(command) - 2}')
+        print(f'Args: {", ".join(arg_info)}')
+        return
+    try:
+        add_index = int(command[2])
+    except ValueError:
+        print(f'{command[2]} is not a valid integer')
+        return
+    add_function(lib, element, add_index, *command[3:])
+
+
+def cmd_write(command: list[str], lib: TriggerLib) -> None:
+    if len(command) < 2:
+        target_dir = 'out'
+    else:
+        target_dir = command[1]
+    print(f'Generating files to {target_dir}/')
+    os.makedirs(target_dir, exist_ok=True)
+    with open(f'{target_dir}/lib.galaxy', 'w') as fp:
+        print(at.codegen_library(lib), file=fp)
+    at.write_triggers_xml(lib, f'{target_dir}/Triggers.xml')
+    at.write_triggers_strings(lib, f'{target_dir}/TriggerStrings.txt')
+
+
 def interactive(repo: RepoObjects) -> None:
     running = True
     lib = repo.libs_by_name['ArchipelagoTriggers']
@@ -116,23 +220,7 @@ def interactive(repo: RepoObjects) -> None:
         elif command[0] == 'exit':
             running = False
         elif command[0] == 'ls':
-            if len(command) > 2:
-                print(f'ls takes up to 1 argument, {len(command) - 1} given')
-                continue
-            elif len(command) == 2:
-                error_msg, search_element = path_to_obj(command[1], element, lib)
-                if error_msg:
-                    print(error_msg)
-                    continue
-            else:
-                search_element = element
-            print(f'Contents of {element_name(lib, search_element)} ({search_element})')
-            parent = lib.parents[search_element]
-            child_names = [(element_name(lib, child), child) for child in lib.children.get(search_element, [])]
-            name_width = max((len(name[0]) for name in child_names), default=1) + 2
-            print(f'.. {" ":{name_width}} ({parent})')
-            for child_index, (child_name, child) in enumerate(child_names):
-                print(f'{child_index:>2} {child_name:<{name_width}} ({child})')
+            cmd_ls(command, lib, element)
         elif command[0] == 'cd':
             if len(command) < 2:
                 print('cd takes an argument')
@@ -143,63 +231,13 @@ def interactive(repo: RepoObjects) -> None:
             else:
                 current_id = element.element_id, element.type
         elif command[0] == 'xml':
-            print(element_name(lib, element))
-            indent_level = 0
-            for line in element.lines:
-                this_indent_level, indent_level = at.get_indentation(line, indent_level)
-                print(('   ' * this_indent_level) + line)
+            cmd_xml(command, lib, element)
         elif command[0] == 'gen':
-            if len(command) > 1:
-                error_msg, search_element = path_to_obj(command[1], element, lib)
-                if error_msg:
-                    print(error_msg)
-                    continue
-            else:
-                search_element = element
-            if search_element.type == ElementType.Trigger:
-                print('===triggers are WIP===')
-                print(at.codegen_trigger(lib, search_element))
-            elif search_element.type == ElementType.FunctionDef:
-                print(at.codegen_function_def(lib, search_element))
-            elif search_element.type == ElementType.FunctionCall:
-                lines = at.codegen_function_call(search_element, at.AutoVarBuilder([]))
-                indent = 0
-                for line in lines:
-                    this_indent, indent = at.get_indentation(line, indent)
-                    print(('    ' * this_indent) + line)
-            elif search_element.type == ElementType.Variable:
-                for line in at.codegen_variable_init(search_element):
-                    print(line)
-            elif search_element.type == ElementType.Param:
-                print(at.codegen_parameter(search_element, at.AutoVarBuilder([])))
-            elif search_element.type == ElementType.PresetValue:
-                print(at.preset_value(lib, search_element))
-            else:
-                print(f'Unable to codegen type of {element_name(lib, search_element)} ({search_element})')
+            cmd_gen(command, lib, element)
         elif command[0] == 'add':
-            funcs_help = [f'{function_name}({", ".join(arg_info)})' for function_name, (_, arg_info) in add_funcs.ADD_FUNCS.items()]
-            if len(command) < 2:
-                print('Must specify a function type to add')
-                print(f'Implemented operations are: {", ".join(funcs_help)}')
-                continue
-            add_func_info = add_funcs.ADD_FUNCS.get(command[1])
-            if add_func_info is None:
-                print(f'Unrecognized add operation "{command[1]}"')
-                print(f'Implemented operations are: {", ".join(funcs_help)}')
-                continue
-            add_function, arg_info = add_func_info
-            if len(command) - 2 != len(arg_info):
-                print(f'Wrong number of args specified for {command[1]}: takes {len(arg_info)}, got {len(command) - 2}')
-                print(f'Args: {", ".join(arg_info)}')
-                continue
-            try:
-                add_index = int(command[2])
-            except ValueError:
-                print(f'{command[2]} is not a valid integer')
-                continue
-            add_function(lib, element, add_index, *command[3:])
-            lib._update_keyword_parameter_indices()
+            cmd_add(command, lib, element)
+        elif command[0] == 'write':
+            cmd_write(command, lib)
         else:
             print(f'Unknown command: {command[0]}')
-
 

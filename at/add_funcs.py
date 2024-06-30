@@ -35,7 +35,7 @@ def add_element(lib: at.TriggerLib, element: at.TriggerElement, parent: at.Trigg
     lib.children[parent][index:index] = [element]
     if not tag_name:
         return
-    child_pattern = re.compile(r'^<\w+ Type="\w+" Library="(\w+)" Id="([0-9A-F]{{8}})"/>$')
+    child_pattern = re.compile(r'^\s*<\w+ Type="\w+" Library="(\w+)" Id="([0-9A-F]{8})"/>')
     children_encountered = 0
     for line_number, line in enumerate(parent.lines[1:-1], start=1):
         if children_encountered >= index:
