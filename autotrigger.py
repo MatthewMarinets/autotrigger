@@ -8,7 +8,7 @@ todo:
 """
 
 import os
-from typing import NamedTuple, Self, TypeVar
+from typing import NamedTuple, Self, TypeVar, overload
 from collections import deque
 import enum
 import re
@@ -162,7 +162,11 @@ class TriggerLib:
         self._parse_trigger_strings(trigger_strings_file)
         return self
     
-    def id_to_string(self, element_id: str, element_type: ElementType, default: _T = None) -> str|_T:
+    @overload
+    def id_to_string(self, element_id: str, element_type: ElementType) -> str|None: ...
+    @overload
+    def id_to_string(self, element_id: str, element_type: ElementType, default: _T) -> str|_T: ...
+    def id_to_string(self, element_id: str, element_type: ElementType, default = None) -> str|_T:
         if element_id == 'root':
             return 'Root'
         return self.trigger_strings.get(f'{element_type}/Name/lib_{self.library}_{element_id}', default)
@@ -1346,7 +1350,7 @@ if __name__ == '__main__':
         )
         assert not error
         assert not add_funcs.add_unlock_functiondef(
-            ap_triggers, category, 'AP_Triggers_Zerg_CreepStomach', 'AP_ZergCreepStomach',
+            ap_triggers, category, -1, 'AP_Triggers_Zerg_CreepStomach', 'AP_ZergCreepStomach',
         )
         sorted_elements = _sort_elements(ap_triggers)
         ap_triggers.objects = {(x.element_id, x.type): x for x in sorted_elements}

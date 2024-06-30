@@ -128,9 +128,9 @@ def interactive(repo: at.RepoObjects) -> None:
             parent = lib.parents[search_element]
             child_names = [(element_name(lib, child), child) for child in lib.children.get(search_element, [])]
             name_width = max((len(name[0]) for name in child_names), default=1) + 2
-            print(f'.. {element_name(lib, parent):{name_width-3}} ({parent})')
-            for child_name, child in child_names:
-                print(f'{child_name:<{name_width}} ({child})')
+            print(f'.. {" ":{name_width}} ({parent})')
+            for child_index, (child_name, child) in enumerate(child_names):
+                print(f'{child_index:>2} {child_name:<{name_width}} ({child})')
         elif command[0] == 'cd':
             if len(command) < 2:
                 print('cd takes an argument')
