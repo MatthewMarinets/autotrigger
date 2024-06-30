@@ -312,10 +312,12 @@ class AutoVarBuilder:
         self.data = data
         self.loop_var = loop_var
         self.return_type = return_type
+        self.append_index = len(data)
     def __bool__(self) -> bool:
         return bool(self.data)
     def append(self, variable: AutoVariable) -> None:
-        self.data.append(variable)
+        self.data[self.append_index:self.append_index] = [variable]
+        self.append_index += 1
 
 
 def get_indentation(line: str, indent_level: int) -> tuple[int, int]:
@@ -945,7 +947,6 @@ def codegen_function_call(
             macro_name, macro_args_str = macro_match.groups()
             macro_args = macro_args_str.split(',')
             if macro_name == 'AUTOVAR':
-                # todo: handle types `parent`, `sameasparent`, `sameas`
                 if len(macro_args) == 1:
                     macro_args.append('int')
                 assert len(macro_args) == 2
@@ -1027,6 +1028,14 @@ def codegen_function_call(
             elif macro_name == 'SUBFUNCS':
                 assert len(macro_args) in (1, 2)
                 subfunc_elements = subfunc_identifier_to_elements[macro_args[0]]
+                if function_def.element_id == '00000137':
+                    # IfThenElse
+                    if macro_args[0] == 'then':
+                        starting_auto_var_amount = len(auto_variables.data)
+                        starting_auto_var_index = auto_variables.append_index
+                    elif macro_args[0] == 'else':
+                        auto_vars_added_by_then = len(auto_variables.data) - starting_auto_var_amount
+                        auto_variables.append_index = starting_auto_var_index
                 if len(macro_args) == 1:
                     formatted_subfuncs = [
                         codegen_function_call(child, auto_variables, end=';', this_subfunc_order=index)
@@ -1048,6 +1057,9 @@ def codegen_function_call(
                     for subfunc_lines in formatted_subfuncs:
                         assert len(subfunc_lines) == 1
                     line = line.replace(macro_match.group(), macro_args[1].strip('"').join(subfunc_lines[0] for subfunc_lines in formatted_subfuncs))
+                if function_def.element_id == '00000137' and macro_args[0] == 'else':
+                    # IfThenElse cleanup
+                    auto_variables.append_index += auto_vars_added_by_then
             else:
                 assert False, f'Macro not implemented: {macro_name}'
         if should_print_line:
