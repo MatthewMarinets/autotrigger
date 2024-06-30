@@ -195,7 +195,7 @@ def add_unit_lock_func(
     return None
 
 
-ADD_FUNCS: dict[str, tuple[add_func, int]] = {
-    'unlock': (add_unlock_functiondef, 2),
-    'unit_lock': (add_unit_lock_func, 1),
+ADD_FUNCS: dict[str, tuple[add_func, list[str]]] = {
+    'unlock': (add_unlock_functiondef, ['index', 'name', 'upgrade_name']),
+    'unit_lock': (add_unit_lock_func, ['index', 'tech_tree_name']),
 }

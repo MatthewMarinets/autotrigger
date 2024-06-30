@@ -1,6 +1,8 @@
 
 import sys
 from .. import autotrigger as at
+from . import add_funcs
+from .parse_triggers import ElementType, TriggerElement, RepoObjects
 
 
 class ConsoleColours:
@@ -43,29 +45,30 @@ def print_help() -> None:
     print('cd - change directory')
     print('ls - print current object info')
     print('gen - generate the galaxy code for the element')
-    print('xml - display the xml lines for the elemnt')
+    print('xml - display the xml lines for the element')
+    print('add - add a function def or function call as a child to the current element')
     print('help')
     print('exit')
 
 
-def element_name(lib: at.TriggerLib, element: at.TriggerElement) -> str:
-    return lib.id_to_string(element.element_id, element.type, 'Unnamed') + ('/' if element.type == at.ElementType.Category else '')
+def element_name(lib: at.TriggerLib, element: TriggerElement) -> str:
+    return lib.id_to_string(element.element_id, element.type, 'Unnamed') + ('/' if element.type == ElementType.Category else '')
 
 
-def element_abspath(element: at.TriggerElement, data: at.TriggerLib) -> str:
+def element_abspath(element: TriggerElement, data: at.TriggerLib) -> str:
     result: list[str] = []
-    while element.type != at.ElementType.Root:
+    while element.type != ElementType.Root:
         result.append(data.id_to_string(element.element_id, element.type, str(element)))
         element = data.parents[element]
     return '/' + '/'.join(reversed(result))
 
 
-def path_to_obj(path: str, start: at.TriggerElement, data: at.TriggerLib) -> tuple[str, at.TriggerElement]:
+def path_to_obj(path: str, start: TriggerElement, data: at.TriggerLib) -> tuple[str, TriggerElement]:
     if not path:
         return ('No path provided', start)
     current = start
     if path.startswith('/'):
-        current = data.objects[('root', at.ElementType.Root)]
+        current = data.objects[('root', ElementType.Root)]
         path = path[1:]
     parts = path.split('/')
     for part in parts:
@@ -75,7 +78,7 @@ def path_to_obj(path: str, start: at.TriggerElement, data: at.TriggerLib) -> tup
             current = data.parents[current]
             continue
         if (part_id := (part[-8:].upper(), part[:-8])) in data.objects:
-            current = data.objects[part_id[0], at.ElementType(part_id[1])]
+            current = data.objects[part_id[0], ElementType(part_id[1])]
             continue
         candidates = [
             x for x in data.children[current]
@@ -95,15 +98,14 @@ def path_to_obj(path: str, start: at.TriggerElement, data: at.TriggerLib) -> tup
     return ('', current)        
 
 
-def interactive(repo: at.RepoObjects) -> None:
-
+def interactive(repo: RepoObjects) -> None:
     running = True
     lib = repo.libs_by_name['ArchipelagoTriggers']
-    DEFAULT_ID = ('root', at.ElementType.Root)
+    DEFAULT_ID = ('root', ElementType.Root)
     current_id = DEFAULT_ID
     print('Started interactive trigger console')
     while running:
-        element: at.TriggerElement = lib.objects[current_id]
+        element: TriggerElement = lib.objects[current_id]
         sys.stdout.write(f'{_console_code(ConsoleColours.BRIGHT_MAGENTA)}{element_abspath(element, lib)}{_console_code()} $ ')
         sys.stdout.flush()
         command = input().split()
@@ -147,28 +149,56 @@ def interactive(repo: at.RepoObjects) -> None:
                 this_indent_level, indent_level = at.get_indentation(line, indent_level)
                 print(('   ' * this_indent_level) + line)
         elif command[0] == 'gen':
-            if element.type == at.ElementType.Trigger:
+            if len(command) > 1:
+                error_msg, search_element = path_to_obj(command[1], element, lib)
+                if error_msg:
+                    print(error_msg)
+                    continue
+            else:
+                search_element = element
+            if search_element.type == ElementType.Trigger:
                 print('===triggers are WIP===')
-                print(at.codegen_trigger(lib, element))
-            elif element.type == at.ElementType.FunctionDef:
-                print(at.codegen_function_def(lib, element))
-            elif element.type == at.ElementType.FunctionCall:
-                lines = at.codegen_function_call(element, at.AutoVarBuilder([]))
+                print(at.codegen_trigger(lib, search_element))
+            elif search_element.type == ElementType.FunctionDef:
+                print(at.codegen_function_def(lib, search_element))
+            elif search_element.type == ElementType.FunctionCall:
+                lines = at.codegen_function_call(search_element, at.AutoVarBuilder([]))
                 indent = 0
                 for line in lines:
                     this_indent, indent = at.get_indentation(line, indent)
                     print(('    ' * this_indent) + line)
-            elif element.type == at.ElementType.Variable:
-                for line in at.codegen_variable_init(element):
+            elif search_element.type == ElementType.Variable:
+                for line in at.codegen_variable_init(search_element):
                     print(line)
-            elif element.type == at.ElementType.Param:
-                print(at.codegen_parameter(element, at.AutoVarBuilder([])))
-            elif element.type == at.ElementType.PresetValue:
-                print(at.preset_value(lib, element))
+            elif search_element.type == ElementType.Param:
+                print(at.codegen_parameter(search_element, at.AutoVarBuilder([])))
+            elif search_element.type == ElementType.PresetValue:
+                print(at.preset_value(lib, search_element))
             else:
-                print(f'Unable to codegen type of {element_name(lib, element)} ({element})')
+                print(f'Unable to codegen type of {element_name(lib, search_element)} ({search_element})')
         elif command[0] == 'add':
-            print('Not implemented')
+            funcs_help = [f'{function_name}({", ".join(arg_info)})' for function_name, (_, arg_info) in add_funcs.ADD_FUNCS.items()]
+            if len(command) < 2:
+                print('Must specify a function type to add')
+                print(f'Implemented operations are: {", ".join(funcs_help)}')
+                continue
+            add_func_info = add_funcs.ADD_FUNCS.get(command[1])
+            if add_func_info is None:
+                print(f'Unrecognized add operation "{command[1]}"')
+                print(f'Implemented operations are: {", ".join(funcs_help)}')
+                continue
+            add_function, arg_info = add_func_info
+            if len(command) - 2 != len(arg_info):
+                print(f'Wrong number of args specified for {command[1]}: takes {len(arg_info)}, got {len(command) - 2}')
+                print(f'Args: {", ".join(arg_info)}')
+                continue
+            try:
+                add_index = int(command[2])
+            except ValueError:
+                print(f'{command[2]} is not a valid integer')
+                continue
+            add_function(lib, element, add_index, *command[3:])
+            lib._update_keyword_parameter_indices()
         else:
             print(f'Unknown command: {command[0]}')
 
