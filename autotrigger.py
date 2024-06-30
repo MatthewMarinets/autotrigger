@@ -8,7 +8,7 @@ todo:
 """
 
 import os
-from typing import NamedTuple, Self
+from typing import NamedTuple, Self, TypeVar
 from collections import deque
 import enum
 import re
@@ -26,6 +26,9 @@ MODS_FOLDER = f"{REPO_ROOT}/Mods"
 GALAXY_FILE = f"{MODS_FOLDER}/ArchipelagoTriggers.SC2Mod/Base.SC2Data/LibABFE498B.galaxy"
 TRIGGERS_FILE = f"{MODS_FOLDER}/ArchipelagoTriggers.SC2Mod/Triggers"
 TRIGGER_STRINGS_FILE = f"{MODS_FOLDER}/ArchipelagoTriggers.SC2Mod/enUS.SC2Data/LocalizedData/TriggerStrings.txt"
+
+
+_T = TypeVar('_T')
 
 
 def fix_bom(lines: list[str]) -> None:
@@ -128,7 +131,6 @@ class TriggerLib:
         'name',
         'objects',
         'trigger_strings',
-        'id_to_string',
         'children',
         'parents',
         'dependencies',
@@ -139,7 +141,6 @@ class TriggerLib:
         self.name = name
         self.objects: dict[tuple[str, ElementType], TriggerElement] = {}
         self.trigger_strings: dict[str, str] = {}
-        self.id_to_string: dict[tuple[str, ElementType], str] = {}
         self.children: dict[TriggerElement, list[TriggerElement]] = {}
         self.parents: dict[TriggerElement, TriggerElement] = {}
         self.dependencies: list[str] = []
@@ -160,6 +161,14 @@ class TriggerLib:
             self._parse_dependencies(document_info_file)
         self._parse_trigger_strings(trigger_strings_file)
         return self
+    
+    def id_to_string(self, element_id: str, element_type: ElementType, default: _T = None) -> str|_T:
+        if element_id == 'root':
+            return 'Root'
+        return self.trigger_strings.get(f'{element_type}/Name/lib_{self.library}_{element_id}', default)
+    
+    def root(self) -> TriggerElement:
+        return self.objects['root', ElementType.Root]
 
     def _parse_triggers(self, triggers_file: str = TRIGGERS_FILE) -> None:
         with open(triggers_file, 'r') as fp:
@@ -216,8 +225,6 @@ class TriggerLib:
             key, val = line.strip().split('=', 1)
             self.trigger_strings[key] = val
             element_type = line.split('/', 1)[0]
-            self.id_to_string[key[-8:], ElementType(element_type)] = val
-        self.id_to_string['root', ElementType.Root] = 'Root'
 
     def _update_indices(self) -> None:
         self.children.clear()
@@ -235,12 +242,10 @@ class TriggerLib:
             else:
                 self.children[obj] = []
                 for line in obj.lines[1:-1]:
-                    if f'Library="{self.library}"' in line:
-                        m = re.search(_id_pattern, line)
-                        assert m
-                        child_id = m.group(1)
-                        m = re.search(_type_pattern, line)
-                        assert m
+                    if m := _type_lib_id_pattern.search(line):
+                        if m.group(2) != self.library:
+                            continue
+                        child_id = m.group(3)
                         child_type = ElementType(m.group(1))
                         self.children[obj].append(self.objects[child_id, child_type])
         priorities = {
@@ -355,7 +360,7 @@ def _sort_elements(lib: TriggerLib) -> list[TriggerElement]:
             children = lib.children.get(new_node, [])
             child_filter: list[ElementType] = []
             if new_node.type not in (ElementType.Category, ElementType.Root):
-                child_filter.extend([ElementType.Trigger, ElementType.FunctionDef])
+                child_filter.extend([ElementType.Trigger, ElementType.FunctionDef, ElementType.CustomScript])
             if new_node.type != ElementType.FunctionDef:
                 child_filter.append(ElementType.ParamDef)
             if child_filter:
@@ -450,7 +455,8 @@ def escape_identifier(string: str) -> str:
 def parameter_name(data: TriggerLib, element: TriggerElement) -> str:
     if identifier := element.get_inline_value('Identifier'):
         return 'lp_' + identifier
-    display_name = data.id_to_string[element.element_id, element.type]
+    display_name = data.id_to_string(element.element_id, element.type)
+    assert display_name
     return escape_identifier('lp_' + display_name[0].lower() + display_name[1:].replace(' ', ''))
 
 
@@ -458,7 +464,9 @@ def global_variable_name(data: TriggerLib, element: TriggerElement) -> str:
     assert element.type == ElementType.Variable
     identifier = element.get_inline_value('Identifier')
     if identifier is None:
-        identifier = toggle_case_of_first_letter(escape_identifier(data.id_to_string[element.element_id, element.type]))
+        unescaped = data.id_to_string(element.element_id, element.type)
+        assert unescaped
+        identifier = toggle_case_of_first_letter(escape_identifier(unescaped))
     return f'lib{data.library}_gv_{identifier}'
 
 
@@ -466,7 +474,8 @@ def local_variable_name(data: TriggerLib, element: TriggerElement) -> str:
     assert element.type == ElementType.Variable
     identifier = element.get_inline_value('Identifier')
     if identifier is None:
-        identifier = data.id_to_string[element.element_id, element.type]
+        identifier = data.id_to_string(element.element_id, element.type)
+        assert identifier
         identifier = identifier[0].lower() + identifier[1:]
     return escape_identifier('lv_' + identifier)
 
@@ -485,19 +494,19 @@ def function_name(data: TriggerLib, element: TriggerElement) -> str:
         prefix = f'lib{data.library}_gf_'
     if identifier is not None:
         return f'{prefix}{identifier}'
-    return f'{prefix}{escape_identifier(data.id_to_string[element.element_id, element.type])}'
+    return f'{prefix}{escape_identifier(data.id_to_string(element.element_id, element.type, "@func"))}'
 
 
 def trigger_name(data: TriggerLib, element: TriggerElement) -> str:
     prefix = f'lib{data.library}_gt_'
     if identifier := element.get_inline_value('Identifier'):
         return prefix + identifier
-    return f'{prefix}{escape_identifier(data.id_to_string[element.element_id, element.type])}'
+    return f'{prefix}{escape_identifier(data.id_to_string(element.element_id, element.type, "@trigger"))}'
 
 
 
 def preset_type_name(data: TriggerLib, element: TriggerElement) -> str:
-    return  escape_identifier(data.id_to_string[element.element_id, element.type])
+    return  escape_identifier(data.id_to_string(element.element_id, element.type, "@preset"))
 
 
 def preset_value(data: TriggerLib, element: TriggerElement) -> str:
@@ -507,7 +516,7 @@ def preset_value(data: TriggerLib, element: TriggerElement) -> str:
     if identifier := element.get_inline_value('Identifier'):
         identifier = unescape_xml_string(identifier)
     else:
-        identifier = escape_identifier(data.id_to_string[element.element_id, element.type])
+        identifier = escape_identifier(data.id_to_string(element.element_id, element.type, "@presetvalue"))
     preset_type_element = data.parents[element]
     assert preset_type_element.type == ElementType.Preset
     # preset_type_line = element.get_first_line_of_tag('TypeElement')
@@ -1216,9 +1225,9 @@ def codegen_trigger(data: TriggerLib, trigger: TriggerElement) -> str:
         result.append(('    ' * indent * (len(string) > 0)) + string)
 
     _print('//' + ('-' * 98))
-    _print(f'// Trigger: {data.id_to_string[trigger.element_id, trigger.type]}')
+    _print(f'// Trigger: {data.id_to_string(trigger.element_id, trigger.type, "@trigger")}')
     _print('//' + ('-' * 98))
-    _print(f'bool lib{data.library}_gt_{data.id_to_string[trigger.element_id, trigger.type]}_Func (bool testConds, bool runActions) {{')
+    _print(f'bool lib{data.library}_gt_{data.id_to_string(trigger.element_id, trigger.type, "@trigger")}_Func (bool testConds, bool runActions) {{')
     indent += 1
     _print('// Variable Declarations')
     for variable in variables:
@@ -1283,7 +1292,7 @@ def codegen_library(data: TriggerLib) -> str:
         result.append('// Custom Script')
     for custom_script in custom_scripts:
         result.append('//' + ('-' * 98))
-        result.append(f'// Custom Script: {data.id_to_string[custom_script.element_id, custom_script.type]}')
+        result.append(f'// Custom Script: {data.id_to_string(custom_script.element_id, custom_script.type, "@customscript")}')
         result.append('//' + ('-' * 98))
         custom_script_lines = codegen_custom_script(custom_script)
         result.extend(indent_lines(custom_script_lines)[1])
@@ -1317,9 +1326,20 @@ if __name__ == '__main__':
     import sys
     ap_triggers = repo_objects.libs_by_name['ArchipelagoTriggers']
     ap_player = repo_objects.libs_by_name['ArchipelagoPlayer']
+    from scripts.at import add_funcs, interactive
+    if False:
+        error, category = interactive.path_to_obj(
+            '/TechTree/Zerg/Unlocks/MiscUpgrades',
+            ap_triggers.root(), ap_triggers
+        )
+        assert not error
+        assert not add_funcs.add_unlock_functiondef(
+            ap_triggers, category, 'AP_Triggers_Zerg_CreepStomach', 'AP_ZergCreepStomach',
+        )
+        sorted_elements = _sort_elements(ap_triggers)
+        ap_triggers.objects = {(x.element_id, x.type): x for x in sorted_elements}
     if '-i' in sys.argv:
-        from scripts.at.interactive import interactive
-        interactive(repo_objects)
+        interactive.interactive(repo_objects)
     else:
         with open('aptriggers.log', 'w') as fp:
             print(codegen_library(ap_triggers), file=fp)

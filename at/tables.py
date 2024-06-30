@@ -374,7 +374,7 @@ default_return_values = {
     'string': 'null',
 }
 
-types = {
+# types = {
     # 'actor'
     # 'actorscope'
     # 'abilcmd'
@@ -457,4 +457,4 @@ types = {
     # 'wave'
     # 'waveinfo'
     # 'wavetarget'
-}
+# }

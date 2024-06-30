@@ -49,13 +49,13 @@ def print_help() -> None:
 
 
 def element_name(lib: at.TriggerLib, element: at.TriggerElement) -> str:
-    return lib.id_to_string.get((element.element_id, element.type), 'Unnamed') + ('/' if element.type == at.ElementType.Category else '')
+    return lib.id_to_string(element.element_id, element.type, 'Unnamed') + ('/' if element.type == at.ElementType.Category else '')
 
 
 def element_abspath(element: at.TriggerElement, data: at.TriggerLib) -> str:
     result: list[str] = []
     while element.type != at.ElementType.Root:
-        result.append(data.id_to_string.get((element.element_id, element.type), str(element)))
+        result.append(data.id_to_string(element.element_id, element.type, str(element)))
         element = data.parents[element]
     return '/' + '/'.join(reversed(result))
 
@@ -79,7 +79,7 @@ def path_to_obj(path: str, start: at.TriggerElement, data: at.TriggerLib) -> tup
             continue
         candidates = [
             x for x in data.children[current]
-            if data.id_to_string.get((x.element_id, x.type), '').casefold() == part.casefold()
+            if data.id_to_string(x.element_id, x.type, '').casefold() == part.casefold()
         ]
         if candidates:
             current = candidates[0]
@@ -127,7 +127,7 @@ def interactive(repo: at.RepoObjects) -> None:
             print(f'Contents of {element_name(lib, search_element)} ({search_element})')
             parent = lib.parents[search_element]
             child_names = [(element_name(lib, child), child) for child in lib.children.get(search_element, [])]
-            name_width = max(len(name[0]) for name in child_names) + 2
+            name_width = max((len(name[0]) for name in child_names), default=1) + 2
             print(f'.. {element_name(lib, parent):{name_width-3}} ({parent})')
             for child_name, child in child_names:
                 print(f'{child_name:<{name_width}} ({child})')
