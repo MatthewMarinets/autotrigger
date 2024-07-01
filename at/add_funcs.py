@@ -10,7 +10,7 @@ class Error:
 
 
 class add_func(Protocol):
-    def __call__(self, lib: at.TriggerLib, parent: at.TriggerElement, index: int, *args, **kwargs) -> Error|None: ...
+    def __call__(self, lib: at.TriggerLib, parent: at.TriggerElement, *args, **kwargs) -> Error|None: ...
 
 
 def random_id(lib: at.TriggerLib, element_type: ElementType) -> str:
@@ -60,7 +60,7 @@ def add_unlock_functiondef(
     function_def = at.TriggerElement([
         f'<Element Type="{ElementType.FunctionDef}" Id="{function_def_id}">',
         f'<Identifier>{name}</Identifier>',
-        # f'<FlagAction/>',  # Not sure if this matters?
+        f'<FlagAction/>',  # This just seems to change the icon of the function in the GUI from '?' to numbers
         f'<Parameter Type="ParamDef" Library="{lib.library}" Id="{param_def_id}"/>',
         f'</Element>',
     ], lib.library)

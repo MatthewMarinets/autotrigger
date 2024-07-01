@@ -2,7 +2,7 @@
 Script for modifying `Trigger` files with unlock triggers,
 so we can update GUI triggers without having to put up with the editor.
 todo:
-* triggers
+* trigger conditions
 * What's going on with StringExternal vs StringToText("")
 * Array assignments
 """
@@ -358,6 +358,7 @@ def codegen_parameter(element: TriggerElement, auto_variables: AutoVarBuilder) -
         expression_to_child = {
             child.get_attribute('ExpressionCode', 'Value'): codegen_parameter(child, auto_variables)
             for child in children
+            if child.type == ElementType.Param  # Note(mm): Technically, it's more correct to check the tag name is 'ExpressionParam'
         }
         return '(' + re.sub(
             r'~([A-Z]+)~',
@@ -492,6 +493,7 @@ def codegen_function_call(
     auto_variables: AutoVarBuilder,
     end='',
     this_subfunc_order: int = 0,
+    parent_trigger_name: str = 't',
 ) -> list[str]:
     assert element.type == ElementType.FunctionCall
     data = repo_objects.libs[element.library]
@@ -528,7 +530,7 @@ def codegen_function_call(
         parameters = sorted(parameters, key=lambda x: param_order_ids.index(parameter_def_id(x)))
         event_args: list[str] = []
         if '<FlagEvent/>' in function_def.lines:
-            event_args.append('t')
+            event_args.append(parent_trigger_name)
         # Note(mm): This doesn't handle the case where a parameter is unspecified and we're supposed to fallback to the default
         return [
             function_name + '('
@@ -538,7 +540,7 @@ def codegen_function_call(
 
     # get parameter identifiers
     auto_var_element_id = element.element_id
-    param_identifier_to_element: dict[str, TriggerElement] = {}
+    param_identifier_to_element: dict[str, TriggerElement|list[TriggerElement]] = {}
     param_identifier_to_type_element: dict[str, TriggerElement] = {}
     for paramdef_element in param_order:
         identifier = paramdef_element.get_inline_value('Identifier')
@@ -547,7 +549,7 @@ def codegen_function_call(
         if len(arguments) == 1:
             param_identifier_to_element[identifier] = arguments[0]
         elif arguments:
-            raise ValueError(f'Got {len(arguments)} arguments targeting {paramdef_element} ({element})')
+            param_identifier_to_element[identifier] = arguments
         default_line = paramdef_element.get_first_line_of_tag('Default')
         if default_line:
             default_lib, default_element = get_referenced_element(default_line)
@@ -660,6 +662,7 @@ def codegen_function_call(
                 assert len(macro_args) == 2
                 auto_var_name = f'auto{auto_var_element_id}_{macro_args[0]}'
                 parameter_element = param_identifier_to_element[macro_args[1]]
+                assert isinstance(parameter_element, TriggerElement)
                 auto_var_type = codegen_parameter_type(parameter_element) or 'int'
                 auto_var_type = _type_map.get(auto_var_type, auto_var_type)
                 constant_initializer = is_variable_parameter_constant(parameter_element)
@@ -671,12 +674,19 @@ def codegen_function_call(
                     if not line:
                         should_print_line = False
             elif macro_name == 'PARAM':
-                assert len(macro_args) == 1
+                assert len(macro_args) in (1, 2)
                 if macro_args[0] not in param_identifier_to_element:
                     line = line.replace(macro_match.group(), 'true')
                 else:
                     parameter_element = param_identifier_to_element[macro_args[0]]
-                    line = line.replace(macro_match.group(), codegen_parameter(parameter_element, auto_variables))
+                    if isinstance(parameter_element, TriggerElement):
+                        assert len(macro_args) == 1
+                        line = line.replace(macro_match.group(), codegen_parameter(parameter_element, auto_variables))
+                    else:
+                        assert len(macro_args) == 2
+                        param_parts = [codegen_parameter(p, auto_variables) for p in parameter_element]
+                        joiner = macro_args[1].replace('" "', '')
+                        line = line.replace(macro_match.group(), joiner.join(param_parts))
             elif macro_name == 'IFHAVESUBFUNCS':
                 assert len(macro_args) == 2
                 subfunc_elements = subfunc_identifier_to_elements[macro_args[0]]
@@ -857,13 +867,13 @@ def codegen_function_def(data: TriggerLib, element: TriggerElement) -> str:
             last_substantive_line -= 1
         if not result[last_substantive_line].strip().startswith('return'):
             _print(f'return {tables.default_return_values[return_type]};')
-    indent -= 1
     if automatic_variables:
         result[auto_var_insertion_point:auto_var_insertion_point] = ['']
     result[auto_var_insertion_point:auto_var_insertion_point] = [
         f'    {"const " if x.constant else ""}{x.var_type} {x.name}{" = " if x.constant else ""}{x.constant or ""};'
         for x in automatic_variables.data
     ]
+    indent -= 1
     assert indent == 0
     _print('}')
     return '\n'.join(result)
@@ -896,29 +906,103 @@ def find_element_names(trigger_strings: list[str]
 
 
 def codegen_trigger(data: TriggerLib, trigger: TriggerElement) -> str:
-    # Todo(mm): This is incomplete
     result: list[str] = []
     assert trigger.type == ElementType.Trigger
     variables = [child for child in data.children[trigger] if child.type == ElementType.Variable]
+    event_lines = [line for line in trigger.lines if line.strip().startswith('<Event')]
+    events = [get_referenced_element(line)[1] for line in event_lines]
+    condition_lines = [line for line in trigger.lines if line.strip().startswith('<Condition')]
+    conditions = [get_referenced_element(line)[1] for line in condition_lines]
+    functions = [
+        child for child in data.children[trigger]
+        if child.type == ElementType.FunctionCall
+        and child not in events
+        and child not in conditions
+    ]
 
     indent = 0
-    def _print(string: str) -> None:
-        result.append(('    ' * indent * (len(string) > 0)) + string)
+    def _print(string: str = '', this_indent: int|None = None) -> None:
+        if this_indent is None:
+            this_indent = indent
+        result.append(('    ' * this_indent * (len(string) > 0)) + string)
 
+    TRIGGER_NAME = trigger_name(data, trigger)
     _print('//' + ('-' * 98))
     _print(f'// Trigger: {data.id_to_string(trigger.element_id, trigger.type, "@trigger")}')
     _print('//' + ('-' * 98))
-    _print(f'bool lib{data.library}_gt_{data.id_to_string(trigger.element_id, trigger.type, "@trigger")}_Func (bool testConds, bool runActions) {{')
+    _print(f'bool {TRIGGER_NAME}_Func (bool testConds, bool runActions) {{')
     indent += 1
-    _print('// Variable Declarations')
-    for variable in variables:
-        variable_type = get_variable_type(variable)
-        _print(f'{variable_type} {local_variable_name(data, variable)};')
-    result.append('')
+    if variables:
+        _print('// Variable Declarations')
+        for variable in variables:
+            variable_type = get_variable_type(variable)
+            _print(f'{variable_type} {local_variable_name(data, variable)};')
+        _print()
+    
+    _print('// Automatic Variable Declarations')
+    auto_var_insertion_point = len(result)
+    automatic_variables = AutoVarBuilder([], return_type='bool')
+
+    if variables:
+        _print('// Variable Initialization')
+        for variable in variables:
+            for line in codegen_variable_init(variable):
+                _print(line)
+        _print()
+    if functions:
+        _print('// Actions')
+        _print('if (!runActions) {')
+        _print('    return true;')
+        _print('}')
+        _print()
+    for function in functions:
+        lines = codegen_function_call(function, automatic_variables, end=';')
+        indent, lines = indent_lines(lines, indent)
+        result.extend(lines)
+    _print('return true;')
+
+    if automatic_variables:
+        result[auto_var_insertion_point:auto_var_insertion_point] = ['']
+    result[auto_var_insertion_point:auto_var_insertion_point] = [
+        f'    {"const " if x.constant else ""}{x.var_type} {x.name}{" = " if x.constant else ""}{x.constant or ""};'
+        for x in automatic_variables.data
+    ]
+    indent -= 1
+    assert indent == 0
+    _print('}')
+
+    _print()
+    _print(f'//{"-"*98}')
+    _print(f'void {TRIGGER_NAME}_Init () {{')
+    indent += 1
+    _print(f'{TRIGGER_NAME} = TriggerCreate("{TRIGGER_NAME}_Func");')
+    for event in events:
+        lines = codegen_function_call(event, automatic_variables, end=';', parent_trigger_name=TRIGGER_NAME)
+        indent, lines = indent_lines(lines, indent)
+        result.extend(lines)
+    indent -= 1
+    _print('}')
+    _print()
     return '\n'.join(result)
 
 
 def codegen_library(data: TriggerLib) -> str:
+    global_custom_scripts: list[TriggerElement] = []
+    function_defs: list[TriggerElement] = []
+    triggers: list[TriggerElement] = []
+    global_variables: list[TriggerElement] = []
+    for element in data.objects.values():
+        if data.parents[element].type not in (ElementType.Root, ElementType.Category):
+            continue
+        elif element.type == ElementType.CustomScript:
+            global_custom_scripts.append(element)
+        elif element.type == ElementType.FunctionDef:
+            function_defs.append(element)
+        elif element.type == ElementType.Trigger:
+            triggers.append(element)
+        elif element.type == ElementType.Variable:
+            global_variables.append(element)
+
     result: list[str] = []
     result.append('include "TriggerLibs/NativeLib"')
     for dependency_name in data.dependencies:
@@ -954,33 +1038,24 @@ def codegen_library(data: TriggerLib) -> str:
     result.append('')
     result.append(f'    lib{data.library}_InitVariables_completed = true;')
     result.append('')
-    for variable in data.objects.values():
-        if (variable.type != ElementType.Variable
-            or data.parent_element(variable).type not in (ElementType.Root, ElementType.Category)
-        ):
-            continue
+    for variable in global_variables:
         var_init = codegen_variable_init(variable)
         result.extend((' '* 4) + line for line in var_init)
     result.append('}')
     result.append('')
 
-    custom_scripts = [
-        x for x in data.objects.values()
-        if x.type == ElementType.CustomScript
-        and data.parents[x].type in (ElementType.Root, ElementType.Category)
-    ]
-    if custom_scripts:
+    if global_custom_scripts:
         result.append('// Custom Script')
-    for custom_script in custom_scripts:
+    for custom_script in global_custom_scripts:
         result.append('//' + ('-' * 98))
         result.append(f'// Custom Script: {data.id_to_string(custom_script.element_id, custom_script.type, "@customscript")}')
         result.append('//' + ('-' * 98))
         custom_script_lines = codegen_custom_script(custom_script)
         result.extend(indent_lines(custom_script_lines)[1])
         result.append('')
-    if custom_scripts:
+    if global_custom_scripts:
         result.append(f'void lib{data.library}_InitCustomScript () {{')
-        for custom_script in custom_scripts:
+        for custom_script in global_custom_scripts:
             if custom_script_func := custom_script.get_inline_value('InitFunc'):
                 result.append(f'{custom_script_func}();')
         result.append('}')
@@ -993,13 +1068,45 @@ def codegen_library(data: TriggerLib) -> str:
     if presets:
         result.append('// Presets')
     result.append('// Functions')
-    for element in data.objects.values():
-        if element.type == ElementType.FunctionDef:
-            function_def = codegen_function_def(data, element)
-            if function_def:
-                result.append(function_def)
-                result.append('')
+    for element in function_defs:
+        function_def = codegen_function_def(data, element)
+        if function_def:
+            result.append(function_def)
+            result.append('')
     result.append('// Triggers')
+    for element in triggers:
+        trigger_result = codegen_trigger(data, element)
+        result.append(trigger_result)
+    
+    if triggers:
+        result.append(f'void lib{data.library}_InitTriggers () {{')
+        for element in triggers:
+            result.append(f'    {trigger_name(data, element)}_Init();')
+        result.append('}')
+        result.append('')
+
+    # Library init
+    result.append(f'//{"-"*98}')
+    result.append('// Library Initialization')
+    result.append(f'//{"-"*98}')
+    result.append(f'bool lib{data.library}_InitLib_completed = false;')
+    result.append('')
+    result.append(f'void lib{data.library}_InitLib () {{')
+    result.append(f'    if (lib{data.library}_InitLib_completed) {{')
+    result.append('        return;')
+    result.append('    }')
+    result.append('')
+    result.append(f'    lib{data.library}_InitLib_completed = true;')
+    result.append('')
+    result.append(f'    lib{data.library}_InitLibraries();')
+    if global_variables:
+        result.append(f'    lib{data.library}_InitVariables();')
+    if global_custom_scripts:
+        result.append(f'    lib{data.library}_InitCustomScript();')
+    if triggers:
+        result.append(f'    lib{data.library}_InitTriggers();')
+    result.append('}')
+    result.append('')
     return '\n'.join(result)
 
 
