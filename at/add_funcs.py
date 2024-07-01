@@ -223,7 +223,7 @@ def parse_bool(val: str) -> bool:
 
 
 ADD_FUNCS: dict[str, tuple[add_func, list[str], dict[int, Callable]]] = {
-    'unlock_fn': (add_unlock_functiondef, ['index', 'name'], {0: int}),
+    'fn': (add_unlock_functiondef, ['index', 'name'], {0: int}),
     'upgrade': (add_set_upgrade_level_function_call, ['index', 'upgrade_name'], {0: int}),
     'unit': (add_unit_lock_func, ['index', 'tech_tree_name', 'lock'], {0: int, 2: parse_bool}),
 }
