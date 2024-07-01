@@ -8,11 +8,10 @@ todo:
 """
 
 from typing import NamedTuple
-from collections import deque
 import re
 
 from scripts.at import tables
-from scripts.at.parse_triggers import ElementType, TriggerElement, TriggerLib, repo_objects, get_referenced_element
+from scripts.at.parse_triggers import ElementType, TriggerElement, TriggerLib, repo_objects, get_referenced_element, sort_elements
 from scripts.at.util import unescape_xml_string
 
 
@@ -69,33 +68,8 @@ def indent_lines(lines: list[str], indent: int = 0) -> tuple[int, list[str]]:
     return indent, result
 
 
-def _sort_elements(lib: TriggerLib) -> list[TriggerElement]:
-    child_order: dict[TriggerElement, int] = {}
-    root_element = lib.objects['root', ElementType.Root]
-    search_stack = deque([root_element])
-    while search_stack:
-        new_node = search_stack.pop()
-        if new_node not in child_order:
-            child_order[new_node] = len(child_order)
-            children = lib.children.get(new_node, [])
-            child_filter: list[ElementType] = []
-            if new_node.type not in (ElementType.Category, ElementType.Root):
-                child_filter.extend([ElementType.Trigger, ElementType.FunctionDef, ElementType.CustomScript])
-            if new_node.type != ElementType.FunctionDef:
-                child_filter.append(ElementType.ParamDef)
-            if child_filter:
-                children = [
-                    child for child in children
-                    if child.type not in child_filter
-                ]
-            search_stack.extend(reversed(children))
-
-    child_order[root_element] = -1
-    return sorted(lib.objects.values(), key=lambda x: child_order[x])
-
-
 def write_triggers_xml(lib: TriggerLib, triggers_file: str) -> None:
-    sorted_elements = _sort_elements(lib)
+    sorted_elements = sort_elements(lib)
     with open(triggers_file, 'w') as fp:
         def _print(string: str, indent_level: int = 0) -> None:
             print((' ' * (4 * indent_level)) + string, file=fp)
@@ -1044,11 +1018,13 @@ if __name__ == '__main__':
         assert not add_funcs.add_unlock_functiondef(
             ap_triggers, category, -1, 'AP_Triggers_Zerg_CreepStomach', 'AP_ZergCreepStomach',
         )
-        sorted_elements = _sort_elements(ap_triggers)
+        sorted_elements = sort_elements(ap_triggers)
         ap_triggers.objects = {(x.element_id, x.type): x for x in sorted_elements}
     if '-i' in sys.argv:
         interactive.interactive(repo_objects)
     else:
+        ap_triggers.sort_elements()
+        ap_player.sort_elements()
         os.makedirs('out', exist_ok=True)
         with open('out/aptriggers.log', 'w') as fp:
             print(codegen_library(ap_triggers), file=fp)

@@ -37,11 +37,11 @@ def add_element(lib: at.TriggerLib, element: at.TriggerElement, parent: at.Trigg
         return
     child_pattern = re.compile(r'^\s*<\w+ Type="\w+" Library="(\w+)" Id="([0-9A-F]{8})"/>')
     children_encountered = 0
-    for line_number, line in enumerate(parent.lines[1:-1], start=1):
-        if children_encountered >= index:
-            break
+    for line_number, line in enumerate(parent.lines[:-1], start=1):
         if (m := child_pattern.match(line)) and m.group(1) == lib.library:
             children_encountered += 1
+        if children_encountered >= index:
+            break
     parent.lines[line_number:line_number] = [f'<{tag_name} Type="{element.type}" Library="{lib.library}" Id="{element.element_id}"/>']
 
 
@@ -50,24 +50,18 @@ def add_unlock_functiondef(
     parent: at.TriggerElement,
     index: int,
     name: str,
-    upgrade_name: str,
 ) -> Error|None:
     if parent.type not in (ElementType.Root, ElementType.Category):
         return Error('Attempted to add a function def to a non-category')
     function_def_id = random_id(lib, ElementType.FunctionDef)
     param_def_id = random_id(lib, ElementType.ParamDef)
     default_param_id = random_id(lib, ElementType.Param)
-    function_call_id = random_id(lib, ElementType.FunctionCall)
-    function_arg_1_id = random_id(lib, ElementType.Param)
-    function_arg_3_id = random_id(lib, ElementType.Param)
-    function_arg_2_id = random_id(lib, ElementType.Param)
 
     function_def = at.TriggerElement([
         f'<Element Type="{ElementType.FunctionDef}" Id="{function_def_id}">',
         f'<Identifier>{name}</Identifier>',
         # f'<FlagAction/>',  # Not sure if this matters?
         f'<Parameter Type="ParamDef" Library="{lib.library}" Id="{param_def_id}"/>',
-        f'<FunctionCall Type="FunctionCall" Library="{lib.library}" Id="{function_call_id}"/>',
         f'</Element>',
     ], lib.library)
     lib.trigger_strings[f'{ElementType.FunctionDef}/Name/lib_{lib.library}_{function_def_id}'] = name
@@ -91,6 +85,26 @@ def add_unlock_functiondef(
         f'</Element>',
     ], lib.library)
     add_element(lib, default_param, param_def)
+    return None
+
+
+def add_set_upgrade_level_function_call(
+    lib: at.TriggerLib,
+    parent: at.TriggerElement,
+    index: int,
+    upgrade_name: str,
+) -> Error|None:
+    if parent.type != ElementType.FunctionDef:
+        return Error('Must add function calls to function defs')
+    function_call_id = random_id(lib, ElementType.FunctionCall)
+    function_arg_1_id = random_id(lib, ElementType.Param)
+    function_arg_3_id = random_id(lib, ElementType.Param)
+    function_arg_2_id = random_id(lib, ElementType.Param)
+
+    lp_player_elements = [child for child in lib.children[parent] if child.type == ElementType.ParamDef]
+    if len(lp_player_elements) != 1:
+        return Error(f"Current FunctionDef doesn't have one parameter (got {len(lp_player_elements)} parameters)")
+    lp_player_id = lp_player_elements[0].element_id  # FFC5A20B
 
     # libNtve_gf_SetUpgradeLevelForPlayer
     function_call = at.TriggerElement([
@@ -101,13 +115,13 @@ def add_unlock_functiondef(
         f'<Parameter Type="Param" Library="{lib.library}" Id="{function_arg_3_id}"/>',
         f'</Element>',
     ], lib.library)
-    add_element(lib, function_call, function_def)
+    add_element(lib, function_call, parent, index, ElementType.FunctionCall)
 
     # arg 1: lp_player
     arg_1 = at.TriggerElement([
         f'<Element Type="Param" Id="{function_arg_1_id}">',
         f'<ParameterDef Type="ParamDef" Library="Ntve" Id="C7188352"/>',
-        f'<Parameter Type="ParamDef" Library="ABFE498B" Id="{param_def_id}"/>',
+        f'<Parameter Type="ParamDef" Library="ABFE498B" Id="{lp_player_id}"/>',
         f'</Element>',
     ], lib.library)
     add_element(lib, arg_1, function_call)
@@ -140,6 +154,7 @@ def add_unit_lock_func(
     parent: at.TriggerElement,
     index: int,
     tech_tree_name: str,
+    lock: bool = False,
 ) -> Error|None:
     if parent.type != ElementType.FunctionDef:
         return Error(f'Attempted to add unit lock function to non-function def ({parent.type})')
@@ -185,17 +200,30 @@ def add_unit_lock_func(
     ], lib.library)
     add_element(lib, unit_param, function_call)
 
+    if lock:
+        preset_id = '00000106'
+    else:
+        preset_id = '00000107'
     allow_param = at.TriggerElement([
         f'<Element Type="Param" Id="{allow_param_id}">',
         f'<ParameterDef Type="ParamDef" Library="Ntve" Id="C26556EA"/>',
-        f'<Preset Type="PresetValue" Library="Ntve" Id="00000107"/>',
+        f'<Preset Type="PresetValue" Library="Ntve" Id="{preset_id}"/>',
         f'</Element>',
     ], lib.library)
     add_element(lib, allow_param, function_call)
     return None
 
 
-ADD_FUNCS: dict[str, tuple[add_func, list[str]]] = {
-    'unlock': (add_unlock_functiondef, ['index', 'name', 'upgrade_name']),
-    'unit_lock': (add_unit_lock_func, ['index', 'tech_tree_name']),
+def parse_bool(val: str) -> bool:
+    if val.lower() in ('false', 'f'):
+        return False
+    elif val.lower() in ('true', 't'):
+        return True
+    raise ValueError('Invalid bool literal')
+
+
+ADD_FUNCS: dict[str, tuple[add_func, list[str], dict[int, Callable]]] = {
+    'unlock_fn': (add_unlock_functiondef, ['index', 'name'], {0: int}),
+    'upgrade': (add_set_upgrade_level_function_call, ['index', 'upgrade_name'], {0: int}),
+    'unit': (add_unit_lock_func, ['index', 'tech_tree_name', 'lock'], {0: int, 2: parse_bool}),
 }

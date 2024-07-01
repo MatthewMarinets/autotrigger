@@ -4,6 +4,7 @@ import enum
 import re
 import os
 import json
+from collections import deque
 
 
 with open(os.path.join(os.path.dirname(__file__), '..', 'config.json'), 'r') as fp:
@@ -148,6 +149,13 @@ class TriggerLib:
         self._parse_trigger_strings(trigger_strings_file)
         return self
     
+    def sort_elements(self) -> None:
+        sorted_objects = sort_elements(self)
+        self.objects.clear()
+        for obj in sorted_objects:
+            self.objects[obj.element_id, obj.type] = obj
+        self._update_indices()
+    
     @overload
     def id_to_string(self, element_id: str, element_type: ElementType) -> str|None: ...
     @overload
@@ -251,7 +259,7 @@ class TriggerLib:
                     self.parents[child] = parent
         root_element = self.objects['root', ElementType.Root]
         self.parents[root_element] = root_element
-    
+
     def _update_keyword_parameter_indices(self) -> None:
         self.keyword_parameters.clear()
         for element in self.objects.values():
@@ -297,3 +305,28 @@ def get_referenced_element(line: str) -> tuple[TriggerLib, TriggerElement]:
     _type, _lib, _id = m.groups()
     lib = repo_objects.libs[_lib]
     return lib, lib.objects[_id, ElementType(_type)]
+
+
+def sort_elements(lib: TriggerLib) -> list[TriggerElement]:
+    child_order: dict[TriggerElement, int] = {}
+    root_element = lib.objects['root', ElementType.Root]
+    search_stack = deque([root_element])
+    while search_stack:
+        new_node = search_stack.pop()
+        if new_node not in child_order:
+            child_order[new_node] = len(child_order)
+            children = lib.children.get(new_node, [])
+            child_filter: list[ElementType] = []
+            if new_node.type not in (ElementType.Category, ElementType.Root):
+                child_filter.extend([ElementType.Trigger, ElementType.FunctionDef, ElementType.CustomScript])
+            if new_node.type != ElementType.FunctionDef:
+                child_filter.append(ElementType.ParamDef)
+            if child_filter:
+                children = [
+                    child for child in children
+                    if child.type not in child_filter
+                ]
+            search_stack.extend(reversed(children))
+
+    child_order[root_element] = -1
+    return sorted(lib.objects.values(), key=lambda x: child_order[x])

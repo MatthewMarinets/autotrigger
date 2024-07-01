@@ -132,6 +132,7 @@ def cmd_gen(command: list[str], lib: TriggerLib, element: TriggerElement) -> Non
         print('===triggers are WIP===')
         print(at.codegen_trigger(lib, search_element))
     elif search_element.type == ElementType.FunctionDef:
+        lib.sort_elements()
         print(at.codegen_function_def(lib, search_element))
     elif search_element.type == ElementType.FunctionCall:
         lines = at.codegen_function_call(search_element, at.AutoVarBuilder([]))
@@ -166,7 +167,7 @@ def cmd_xml(command: list[str], lib: TriggerLib, element: TriggerElement) -> Non
 
 
 def cmd_add(command: list[str], lib: TriggerLib, element: TriggerElement) -> None:
-    funcs_help = [f'{function_name}({", ".join(arg_info)})' for function_name, (_, arg_info) in add_funcs.ADD_FUNCS.items()]
+    funcs_help = [f'{function_name}({", ".join(arg_info)})' for function_name, (_, arg_info, _) in add_funcs.ADD_FUNCS.items()]
     if len(command) < 2:
         print('Must specify a function type to add')
         print(f'Implemented operations are: {", ".join(funcs_help)}')
@@ -176,20 +177,27 @@ def cmd_add(command: list[str], lib: TriggerLib, element: TriggerElement) -> Non
         print(f'Unrecognized add operation "{command[1]}"')
         print(f'Implemented operations are: {", ".join(funcs_help)}')
         return
-    add_function, arg_info = add_func_info
+    add_function, arg_info, arg_parsers = add_func_info
     if len(command) - 2 != len(arg_info):
         print(f'Wrong number of args specified for {command[1]}: takes {len(arg_info)}, got {len(command) - 2}')
         print(f'Args: {", ".join(arg_info)}')
         return
-    try:
-        add_index = int(command[2])
-    except ValueError:
-        print(f'{command[2]} is not a valid integer')
-        return
-    add_function(lib, element, add_index, *command[3:])
+    args = []
+    for arg_index, arg_literal in enumerate(command[2:]):
+        parser = arg_parsers.get(arg_index)
+        if parser is None:
+            args.append(arg_literal)
+            continue
+        try:
+            args.append(parser(arg_literal))
+        except ValueError as ex:
+            print(f'Invalid argument \'{arg_literal}\': {ex}')
+            return
+    add_function(lib, element, *args)
 
 
 def cmd_write(command: list[str], lib: TriggerLib) -> None:
+    lib.sort_elements()
     if len(command) < 2:
         target_dir = 'out'
     else:
