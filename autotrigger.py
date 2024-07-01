@@ -1132,19 +1132,8 @@ if __name__ == '__main__':
     import os
     ap_triggers = repo_objects.libs_by_name['ArchipelagoTriggers']
     ap_player = repo_objects.libs_by_name['ArchipelagoPlayer']
-    from autotrigger.at import add_funcs, interactive
-    if False:
-        error, category = interactive.path_to_obj(
-            '/TechTree/Zerg/Unlocks/MiscUpgrades',
-            ap_triggers.root(), ap_triggers
-        )
-        assert not error
-        assert not add_funcs.add_unlock_functiondef(
-            ap_triggers, category, -1, 'AP_Triggers_Zerg_CreepStomach', 'AP_ZergCreepStomach',
-        )
-        sorted_elements = sort_elements(ap_triggers)
-        ap_triggers.objects = {(x.element_id, x.type): x for x in sorted_elements}
     if '-i' in sys.argv:
+        from autotrigger.at import interactive
         interactive.interactive(repo_objects)
     else:
         ap_triggers.sort_elements()
