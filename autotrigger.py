@@ -949,6 +949,21 @@ def codegen_trigger(data: TriggerLib, trigger: TriggerElement) -> str:
             for line in codegen_variable_init(variable):
                 _print(line)
         _print()
+    
+    if conditions:
+        _print('// Conditions')
+        _print('if (testConds) {')
+        for element_index, element in enumerate(conditions):
+            if element_index:
+                _print()
+            condition_result = codegen_function_call(element, automatic_variables)
+            assert len(condition_result) == 1
+            _print(f'    if (!({condition_result[0]})) {{')
+            _print('        return false;')
+            _print('    }')
+        _print('}')
+        _print()
+
     if functions:
         _print('// Actions')
         _print('if (!runActions) {')
@@ -976,6 +991,8 @@ def codegen_trigger(data: TriggerLib, trigger: TriggerElement) -> str:
     _print(f'void {TRIGGER_NAME}_Init () {{')
     indent += 1
     _print(f'{TRIGGER_NAME} = TriggerCreate("{TRIGGER_NAME}_Func");')
+    if '<InitOff/>' in trigger.lines:
+        _print(f'TriggerEnable({TRIGGER_NAME}, false);')
     for event in events:
         lines = codegen_function_call(event, automatic_variables, end=';', parent_trigger_name=TRIGGER_NAME)
         indent, lines = indent_lines(lines, indent)
