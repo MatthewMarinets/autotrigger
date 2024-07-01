@@ -10,9 +10,9 @@ todo:
 from typing import NamedTuple
 import re
 
-from scripts.at import tables
-from scripts.at.parse_triggers import ElementType, TriggerElement, TriggerLib, repo_objects, get_referenced_element, sort_elements
-from scripts.at.util import unescape_xml_string
+from autotrigger.at import tables
+from autotrigger.at.parse_triggers import ElementType, TriggerElement, TriggerLib, repo_objects, get_referenced_element, sort_elements
+from autotrigger.at.util import unescape_xml_string
 
 
 _library_id_pattern = re.compile(r'Library="(\w+)" Id="([0-9A-F]{8})"')
@@ -1132,7 +1132,7 @@ if __name__ == '__main__':
     import os
     ap_triggers = repo_objects.libs_by_name['ArchipelagoTriggers']
     ap_player = repo_objects.libs_by_name['ArchipelagoPlayer']
-    from scripts.at import add_funcs, interactive
+    from autotrigger.at import add_funcs, interactive
     if False:
         error, category = interactive.path_to_obj(
             '/TechTree/Zerg/Unlocks/MiscUpgrades',

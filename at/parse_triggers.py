@@ -15,8 +15,8 @@ _T = TypeVar('_T')
 
 
 AT_FOLDER = os.path.dirname(__file__)
-SCRIPTS_FOLDER = os.path.dirname(AT_FOLDER)
-REPO_ROOT = os.path.normpath(os.path.dirname(SCRIPTS_FOLDER))
+AUTOTRIGGER_FOLDER = os.path.dirname(AT_FOLDER)
+REPO_ROOT = os.path.normpath(os.path.dirname(AUTOTRIGGER_FOLDER))
 MODS_FOLDER = f"{REPO_ROOT}/Mods"
 GALAXY_FILE = f"{MODS_FOLDER}/ArchipelagoTriggers.SC2Mod/Base.SC2Data/LibABFE498B.galaxy"
 TRIGGERS_FILE = f"{MODS_FOLDER}/ArchipelagoTriggers.SC2Mod/Triggers"
