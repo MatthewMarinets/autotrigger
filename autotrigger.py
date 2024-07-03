@@ -452,40 +452,59 @@ def codegen_custom_script(element: TriggerElement) -> list[str]:
     assert False, f'Custom script element {element.element_id} was missing a ScriptCode block'
 
 
-def codegen_variable_init(element: TriggerElement) -> list[str]:
-    data = repo_objects.libs[element.library]
-    for line in element.lines:
-        if line.startswith('<Value Type="Param"'):
-            if '<Constant/>' in element.lines:
-                # Initialized in the _h file
-                # Note(mm): Technically, `<Constant/>` should appear as a child to `<Type>` specifically
-                return []
-            element_type = ElementType.Param
-            m = _library_id_pattern.search(line)
-            assert m
-            library, var_id = m.groups()
-            var_element = repo_objects.libs[library].objects[var_id, element_type]
-            auto_vars: AutoVarBuilder = AutoVarBuilder([])
-            init_value = codegen_parameter(var_element, auto_vars)
-            if init_value in (
-                '0',
-                '0.0',
-                'null',
-                'false',
-            ):
-                return []
-            result = f'{variable_name(data, element)} = {init_value};'
-            assert not auto_vars.data
-            return [result]
-    return []
+def codegen_variable_init(data: TriggerLib, element: TriggerElement, auto_variables: AutoVarBuilder) -> list[str]:
+    if '<Constant/>' in element.lines:
+        # Initialized in the _h file
+        # Note(mm): Technically, `<Constant/>` should appear as a child to `<Type>` specifically
+        return []
+    value_line = element.get_first_line_of_tag('Value')
+    if not value_line:
+        return []
+    _, value_element = get_referenced_element(value_line)
+    init_value = codegen_parameter(value_element, auto_variables)
+    if init_value in (
+        '0',
+        '0.0',
+        'null',
+        'false',
+    ):
+        return []
+        
+    result: list[str] = []
+    dim_lines = element.get_all_lines_of_tag('ArraySize')
+    assert len(dim_lines) < 13
+    index_identifier = ''
+    for dimension_index, dimension_line in enumerate(dim_lines):
+        auto_var_name = f'init_{chr(ord("i") + dimension_index)}'
+        index_identifier += f'[{auto_var_name}]'
+        auto_var = AutoVariable(auto_var_name, 'int')
+        if auto_var not in auto_variables.data:
+            auto_variables.append(auto_var)
+        if 'Value="' in dimension_line:
+            dimension_limit = dimension_line.split('Value="', 1)[1].split('"', 1)[0]
+        else:
+            array_size_lib, array_size_element = get_referenced_element(dimension_line)
+            dimension_limit = variable_name(array_size_lib, array_size_element)
+        result.append(f'for ({auto_var_name} = 0; {auto_var_name} <= {dimension_limit}; {auto_var_name} += 1) {{')
+    result.append(f'{variable_name(data, element)}{index_identifier} = {init_value};')
+    for _ in range(len(dim_lines)):
+        result.append('}')
+    return result
+
+
+def auto_var_init_lines(automatic_variables: AutoVarBuilder) -> list[str]:
+    return [
+        f'    {"const " if x.constant else ""}{x.var_type} {x.name}{" = " if x.constant else ""}{x.constant or ""};'
+        for x in automatic_variables.data
+    ] + ([''] if automatic_variables else [])
 
 
 def subfunction_line(subfunction: TriggerElement) -> str:
     return f'<SubFunctionType Type="SubFuncType" Library="{subfunction.library}" Id="{subfunction.element_id}"/>'
 
 
-def paramdef_line(paramdef: TriggerElement) -> str:
-    return f'<ParameterDef Type="ParamDef" Library="{paramdef.library}" Id="{paramdef.element_id}"/>'
+def paramdef_line(paramdef_lib: str, paramdef_id: str) -> str:
+    return f'<ParameterDef Type="ParamDef" Library="{paramdef_lib}" Id="{paramdef_id}"/>'
 
 
 def codegen_function_call(
@@ -499,14 +518,13 @@ def codegen_function_call(
     data = repo_objects.libs[element.library]
     if '<Disabled/>' in element.lines:
         return []
-    function_def_lines = [line for line in element.lines if line.startswith('<FunctionDef')]
+    function_def_line = element.get_first_line_of_tag('FunctionDef')
+    if not function_def_line:
+        return ['@nofunc@']
+    function_def_lib, function_def = get_referenced_element(function_def_line)
     child_elements = [child for child in data.children.get(element, []) if child.type != ElementType.Comment]
     parameters = [child for child in child_elements if child.type == ElementType.Param]
     subfunction_parameters = [child for child in child_elements if child.type == ElementType.FunctionCall]
-    if not function_def_lines:
-        return ['@nofunc@']
-    assert len(function_def_lines) == 1
-    function_def_lib, function_def = get_referenced_element(function_def_lines[0])
     function_name, param_order, subfunc_order = codegen_function_info(function_def_lib, function_def.element_id)
     script_code = function_def.get_multiline_value('ScriptCode')
     if function_def.element_id == '00000123' and function_def.library == 'Ntve':  # customscriptaction
@@ -545,14 +563,14 @@ def codegen_function_call(
     for paramdef_element in param_order:
         identifier = paramdef_element.get_inline_value('Identifier')
         assert identifier is not None
-        arguments = [child for child in parameters if paramdef_line(paramdef_element) in child.lines]
+        arguments = [child for child in parameters if paramdef_line(paramdef_element.library, paramdef_element.element_id) in child.lines]
         if len(arguments) == 1:
             param_identifier_to_element[identifier] = arguments[0]
         elif arguments:
             param_identifier_to_element[identifier] = arguments
         default_line = paramdef_element.get_first_line_of_tag('Default')
         if default_line:
-            default_lib, default_element = get_referenced_element(default_line)
+            _, default_element = get_referenced_element(default_line)
             param_identifier_to_element.setdefault(identifier, default_element)
             continue
         paramdef_type = paramdef_element.get_attribute('Type', 'Value')
@@ -568,7 +586,7 @@ def codegen_function_call(
             default_line = parent_paramdef_element.get_first_line_of_tag('Default')
             param_identifier_to_type_element[identifier] = parent_paramdef_element
             if default_line:
-                default_lib, default_element = get_referenced_element(default_line)
+                _, default_element = get_referenced_element(default_line)
                 param_identifier_to_element.setdefault(identifier, default_element)
         elif paramdef_type == 'sameas':
             same_as_line = paramdef_element.get_first_line_of_tag('TypeElement')
@@ -649,7 +667,8 @@ def codegen_function_call(
                     parent_paramdef_element = parent_functiondef_lib.keyword_parameters[parent_functiondef_element][paramdef_identifier]
                     argument = [
                         child for child in data.children[parent]
-                        if child.type == ElementType.Param and paramdef_line(parent_paramdef_element) in child.lines
+                        if child.type == ElementType.Param
+                        and paramdef_line(parent_paramdef_element.library, parent_paramdef_element.element_id) in child.lines
                     ]
                     assert len(argument) == 1
                     auto_var_element_id = parent.element_id
@@ -852,7 +871,7 @@ def codegen_function_def(data: TriggerLib, element: TriggerElement) -> str:
     if variables:
         _print('// Variable Initialization')
         for variable in variables:
-            for line in codegen_variable_init(variable):
+            for line in codegen_variable_init(data, variable, automatic_variables):
                 _print(line)
         _print()
     _print('// Implementation')
@@ -867,12 +886,7 @@ def codegen_function_def(data: TriggerLib, element: TriggerElement) -> str:
             last_substantive_line -= 1
         if not result[last_substantive_line].strip().startswith('return'):
             _print(f'return {tables.default_return_values[return_type]};')
-    if automatic_variables:
-        result[auto_var_insertion_point:auto_var_insertion_point] = ['']
-    result[auto_var_insertion_point:auto_var_insertion_point] = [
-        f'    {"const " if x.constant else ""}{x.var_type} {x.name}{" = " if x.constant else ""}{x.constant or ""};'
-        for x in automatic_variables.data
-    ]
+    result[auto_var_insertion_point:auto_var_insertion_point] = auto_var_init_lines(automatic_variables)
     indent -= 1
     assert indent == 0
     _print('}')
@@ -946,7 +960,7 @@ def codegen_trigger(data: TriggerLib, trigger: TriggerElement) -> str:
     if variables:
         _print('// Variable Initialization')
         for variable in variables:
-            for line in codegen_variable_init(variable):
+            for line in codegen_variable_init(data, variable, automatic_variables):
                 _print(line)
         _print()
     
@@ -976,12 +990,7 @@ def codegen_trigger(data: TriggerLib, trigger: TriggerElement) -> str:
         result.extend(lines)
     _print('return true;')
 
-    if automatic_variables:
-        result[auto_var_insertion_point:auto_var_insertion_point] = ['']
-    result[auto_var_insertion_point:auto_var_insertion_point] = [
-        f'    {"const " if x.constant else ""}{x.var_type} {x.name}{" = " if x.constant else ""}{x.constant or ""};'
-        for x in automatic_variables.data
-    ]
+    result[auto_var_insertion_point:auto_var_insertion_point] = auto_var_init_lines(automatic_variables)
     indent -= 1
     assert indent == 0
     _print('}')
@@ -1049,15 +1058,20 @@ def codegen_library(data: TriggerLib) -> str:
     result.append(f'bool lib{data.library}_InitVariables_completed = false;')
     result.append('')
     result.append(f'void lib{data.library}_InitVariables () {{')
+    iterator_variable_init_index = len(result)
+    auto_variables = AutoVarBuilder([])
     result.append(f'    if (lib{data.library}_InitVariables_completed) {{')
     result.append('        return;')
     result.append('    }')
     result.append('')
     result.append(f'    lib{data.library}_InitVariables_completed = true;')
     result.append('')
+    indent = 1
     for variable in global_variables:
-        var_init = codegen_variable_init(variable)
-        result.extend((' '* 4) + line for line in var_init)
+        var_init = codegen_variable_init(data, variable, auto_variables)
+        indent, var_init = indent_lines(var_init, indent)
+        result.extend(var_init)
+    result[iterator_variable_init_index:iterator_variable_init_index] = auto_var_init_lines(auto_variables)
     result.append('}')
     result.append('')
 
@@ -1074,7 +1088,7 @@ def codegen_library(data: TriggerLib) -> str:
         result.append(f'void lib{data.library}_InitCustomScript () {{')
         for custom_script in global_custom_scripts:
             if custom_script_func := custom_script.get_inline_value('InitFunc'):
-                result.append(f'{custom_script_func}();')
+                result.append(f'    {custom_script_func}();')
         result.append('}')
         result.append('')
 

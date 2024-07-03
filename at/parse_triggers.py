@@ -101,6 +101,9 @@ class TriggerElement:
                 return line
         return None
 
+    def get_all_lines_of_tag(self, tag: str) -> list[str]:
+        return [line for line in self.lines if line.startswith(f'<{tag}')]
+
     def __str__(self) -> str:
         return f'{self.type}(lib={self.library}, id={self.element_id})'
     def __repr__(self) -> str:
@@ -305,7 +308,7 @@ repo_objects = RepoObjects()
 
 def get_referenced_element(line: str) -> tuple[TriggerLib, TriggerElement]:
     m = _type_lib_id_pattern.search(line)
-    assert m
+    assert m, line
     _type, _lib, _id = m.groups()
     lib = repo_objects.libs[_lib]
     return lib, lib.objects[_id, ElementType(_type)]
