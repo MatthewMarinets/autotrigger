@@ -101,6 +101,10 @@ def path_to_obj(path: str, start: TriggerElement, data: at.TriggerLib) -> tuple[
 
 
 def cmd_ls(command: list[str], lib: TriggerLib, element: TriggerElement) -> None:
+    gen_print = False
+    if '-g' in command:
+        gen_print = True
+        command.remove('-g')
     if len(command) > 2:
         print(f'ls takes up to 1 argument, {len(command) - 1} given')
         return
@@ -113,6 +117,11 @@ def cmd_ls(command: list[str], lib: TriggerLib, element: TriggerElement) -> None
         search_element = element
     print(f'Contents of {element_name(lib, search_element)} ({search_element})')
     parent = lib.parents[search_element]
+    if gen_print:
+        for child_index, child in enumerate(lib.children.get(search_element, [])):
+            print(f'{child_index} ', end='')
+            _cmd_gen(lib, child)
+        return
     child_names = [(element_name(lib, child), child) for child in lib.children.get(search_element, [])]
     name_width = max((len(name[0]) for name in child_names), default=1) + 2
     print(f'.. {" ":{name_width}} ({parent})')
@@ -128,27 +137,37 @@ def cmd_gen(command: list[str], lib: TriggerLib, element: TriggerElement) -> Non
             return
     else:
         search_element = element
-    if search_element.type == ElementType.Trigger:
+    _cmd_gen(lib, search_element)
+
+
+def _cmd_gen(lib: TriggerLib, element: TriggerElement) -> None:
+    if element.type == ElementType.Trigger:
         print('===triggers are WIP===')
-        print(at.codegen_trigger(lib, search_element))
-    elif search_element.type == ElementType.FunctionDef:
+        print(at.codegen_trigger(lib, element))
+    elif element.type == ElementType.FunctionDef:
         lib.sort_elements()
-        print(at.codegen_function_def(lib, search_element))
-    elif search_element.type == ElementType.FunctionCall:
-        lines = at.codegen_function_call(search_element, at.AutoVarBuilder([]))
+        print(at.codegen_function_def(lib, element))
+    elif element.type == ElementType.FunctionCall:
+        lines = at.codegen_function_call(element, at.AutoVarBuilder([]))
         indent = 0
         for line in lines:
             this_indent, indent = at.get_indentation(line, indent)
             print(('    ' * this_indent) + line)
-    elif search_element.type == ElementType.Variable:
-        for line in at.codegen_variable_init(search_element):
+    elif element.type == ElementType.Variable:
+        for line in at.codegen_variable_init(element):
             print(line)
-    elif search_element.type == ElementType.Param:
-        print(at.codegen_parameter(search_element, at.AutoVarBuilder([])))
-    elif search_element.type == ElementType.PresetValue:
-        print(at.preset_value(lib, search_element))
+    elif element.type == ElementType.Param:
+        print(at.codegen_parameter(element, at.AutoVarBuilder([])))
+    elif element.type == ElementType.PresetValue:
+        print(at.preset_value(lib, element))
+    elif element.type == ElementType.Comment:
+        comment_contents = element.get_multiline_value('Comment', [])
+        if not comment_contents:
+            print('--')
+        for comment_line in comment_contents:
+            print(f'-- {comment_line}')
     else:
-        print(f'Unable to codegen type of {element_name(lib, search_element)} ({search_element})')
+        print(f'[{element_name(lib, element)}] ({element})')
 
 
 def cmd_xml(command: list[str], lib: TriggerLib, element: TriggerElement) -> None:

@@ -75,11 +75,15 @@ class TriggerElement:
                 return line[len(tag)+2:-(len(tag)+3)]
         return None
 
-    def get_multiline_value(self, tag: str) -> list[str]|None:
+    @overload
+    def get_multiline_value(self, tag: str) -> list[str]|None: ...
+    @overload
+    def get_multiline_value(self, tag: str, default: _T) -> list[str]|_T: ...
+    def get_multiline_value(self, tag: str, default = None) -> list[str]|_T:
         start_tag = f'<{tag}>'
         end_tag = f'</{tag}>'
         if start_tag not in self.lines:
-            return None
+            return default
         if end_tag not in self.lines:
             raise ValueError(f'Unclosed tag in element {self}: {start_tag}')
         return [unescape_xml_string(x) for x in self.lines[self.lines.index(start_tag)+1:self.lines.index(end_tag)]]
