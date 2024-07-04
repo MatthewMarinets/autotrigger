@@ -328,6 +328,8 @@ def sort_elements(lib: TriggerLib) -> list[TriggerElement]:
                 child_filter.extend([ElementType.Trigger, ElementType.FunctionDef, ElementType.CustomScript])
             if new_node.type != ElementType.FunctionDef:
                 child_filter.append(ElementType.ParamDef)
+            if new_node.type == ElementType.Param:
+                child_filter.append(ElementType.Variable)
             if child_filter:
                 children = [
                     child for child in children
