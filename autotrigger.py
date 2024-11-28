@@ -143,6 +143,7 @@ def escape_identifier(string: str) -> str:
         .replace('/', '')
         .replace('+', '')
         .replace('-', '')
+        .replace("'", '')
     )
 
 
