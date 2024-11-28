@@ -180,6 +180,10 @@ class TriggerLib:
             lines = fp.readlines()
         fix_bom(lines)
         current_obj: list[str]|None = None
+        if len(lines) <= 3:
+            self.library = 'nolibrary'
+            self.objects['root', ElementType.Root] = TriggerElement(['<Root>', '</Root>'], self.library)
+            return
         for line_number, line in enumerate(lines[2:], 3):
             line = line.strip()
             if not line:
@@ -187,7 +191,7 @@ class TriggerLib:
             if line_number == 3:
                 library_standard_pattern = re.compile(r'^<(?:Library|Standard) Id="([\w]+)"/?>$')
                 m = library_standard_pattern.match(line)
-                assert m is not None, "Line 3 didn't have the library ID"
+                assert m is not None, f"Line 3 didn't have the library ID (file {triggers_file})"
                 self.library = m.group(1)
             elif line in ('</Library>', '</TriggerData>'):
                 continue
@@ -220,10 +224,12 @@ class TriggerLib:
                 self.dependencies.append(m.group(1))
 
     def _parse_trigger_strings(self, trigger_strings_file: str = TRIGGER_STRINGS_FILE) -> None:
+        self.trigger_strings.clear()
+        if not os.path.exists(trigger_strings_file):
+            return
         with open(trigger_strings_file, 'r') as fp:
             lines = fp.readlines()
         fix_bom(lines)
-        self.trigger_strings.clear()
         for line in lines:
             if not line:
                 continue
@@ -290,6 +296,7 @@ class RepoObjects:
             'ArchipelagoCore',
             'ArchipelagoPlayer',
             'ArchipelagoPatches',
+            'ArchipelagoTradeSystem',
         ]
         libs = [TriggerLib('Native').parse(config['native'], config['native_triggerstrings'])] + [
             TriggerLib(name).parse(

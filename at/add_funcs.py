@@ -214,6 +214,24 @@ def add_unit_lock_func(
     return None
 
 
+def add_category(
+    lib: at.TriggerLib,
+    parent: at.TriggerElement,
+    index: int,
+    category_name: str,
+) -> Error|None:
+    if parent.type not in (ElementType.Category, ElementType.Root):
+        return Error(f'Attempted to add unit lock function to non-category ({parent.type})')
+    category_id = random_id(lib, ElementType.Category)
+    category = at.TriggerElement([
+        f'<Element Type="Category" Id="{category_id}">',
+        f'</Element>',
+    ], lib.library)
+    lib.trigger_strings[f'{ElementType.Category}/Name/lib_{lib.library}_{category_id}'] = category_name
+    add_element(lib, category, parent, index, tag_name='Item')
+    return None
+
+
 def parse_bool(val: str) -> bool:
     if val.lower() in ('false', 'f'):
         return False
@@ -225,5 +243,6 @@ def parse_bool(val: str) -> bool:
 ADD_FUNCS: dict[str, tuple[add_func, list[str], dict[int, Callable]]] = {
     'fn': (add_unlock_functiondef, ['index', 'name'], {0: int}),
     'upgrade': (add_set_upgrade_level_function_call, ['index', 'upgrade_name'], {0: int}),
-    'unit': (add_unit_lock_func, ['index', 'tech_tree_name', 'lock'], {0: int, 2: parse_bool}),
+    'unit': (add_unit_lock_func, ['index', 'tech_tree_name', 'allow'], {0: int, 2: parse_bool}),
+    'category': (add_category, ['index', 'category_name'], {0: int}),
 }
