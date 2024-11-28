@@ -96,6 +96,61 @@ def write_triggers_strings(lib: TriggerLib, triggers_file: str) -> None:
             _print(line)
 
 
+def write_trigger_headers_file(lib: TriggerLib, header_file: str) -> None:
+    with open(header_file, 'w') as fp:
+        def _print(string: str = '', indent_level: int = 0) -> None:
+            print((' ' * (4 * indent_level)) + string, file=fp)
+        _print('include "TriggerLibs/natives"')
+        _print()
+        _print('//' + ('-' * 98))
+        _print(f'// Library: {lib.trigger_strings[f"Library/Name/{lib.library}"]}')
+        _print('//' + ('-' * 98))
+        global_variables = [
+            obj for obj in lib.objects.values()
+            if obj.type == ElementType.Variable
+            and lib.parent_element(obj).type in (ElementType.Category, ElementType.Root)
+        ]
+        constants = [obj for obj in global_variables if '<Constant/>' in obj.lines]
+        variables = [obj for obj in global_variables if obj not in constants]
+        functions = [obj for obj in lib.objects.values() if obj.type == ElementType.FunctionDef]
+        triggers = [obj for obj in lib.objects.values() if obj.type == ElementType.Trigger]
+        if constants:
+            _print('// Constants')
+            for constant in constants:
+                default_param = [obj for obj in lib.children[constant] if obj.type == ElementType.Param]
+                assert len(default_param) == 1
+                default_value = default_param[0].get_inline_value("Value")
+                if not default_value.isdecimal():
+                    default_value = f'"{default_value}"'
+                _print(f'const {get_variable_type(constant)} {variable_name(lib, constant)} = {default_value};')
+            _print()
+        if variables:
+            _print('// Variable Declarations')
+            for variable in variables:
+                _print(f'{get_variable_type(variable)} {variable_name(lib, variable)};')
+            _print()
+        if functions:
+            _print('// Function Declarations')
+            for function in functions:
+                parameters = [child for child in lib.children[function] if child.type == ElementType.ParamDef]
+                parameter_types_names = [(get_variable_type(parameter), parameter_name(lib, parameter)) for parameter in parameters]
+                _print(
+                    f'{parse_return_type(function)} {function_name(lib, function)} ('
+                    + (', '.join(" ".join(x) for x in parameter_types_names))
+                    + ');'
+                )
+            _print()
+        if triggers:
+            _print('// Trigger Declarations')
+            for trigger in triggers:
+                _print(f'trigger {trigger_name(lib, trigger)};')
+            _print()
+        if variables:
+            _print('// Library Initialization')
+            _print('void libABFE498B_InitVariables ();')
+            _print()
+
+
 _type_map = {
     'gamelink': 'string',
     'difficulty': 'int',
@@ -112,6 +167,7 @@ def get_variable_type(element: TriggerElement) -> str:
     in_variable_type = False
     variable_type = ''
     type_element: TriggerElement | None = None
+    array_sizes: list[str] = []
     for line in element.lines:
         if line == '<VariableType>' or line == '<ParameterType>':
             in_variable_type = True
@@ -119,11 +175,14 @@ def get_variable_type(element: TriggerElement) -> str:
             variable_type = m.group(1)
         elif in_variable_type and line.startswith(r'<TypeElement'):
             _, type_element = get_referenced_element(line)
+        elif in_variable_type and (m := re.match(r'<ArraySize Dim="(\w+)" Value="(\w+)"', line)):
+            assert int(m.group(1)) == len(array_sizes)
+            array_sizes.append(str(int(m.group(2)) + 1))
     if variable_type == 'preset':
         assert type_element
         preset_type = preset_backing_type(type_element)
-        return _type_map.get(preset_type, preset_type)
-    return _type_map.get(variable_type, variable_type)
+        return _type_map.get(preset_type, preset_type) + ''.join(f'[{array_size}]' for array_size in array_sizes)
+    return _type_map.get(variable_type, variable_type) + ''.join(f'[{array_size}]' for array_size in array_sizes)
 
 
 def toggle_case_of_first_letter(string: str) -> str:
@@ -1030,11 +1089,20 @@ def codegen_library(data: TriggerLib) -> str:
         elif element.type == ElementType.Variable:
             global_variables.append(element)
 
+    # includes
     result: list[str] = []
     result.append('include "TriggerLibs/NativeLib"')
-    for dependency_name in data.dependencies:
+    def _write_dependency(dependency_name: str, fmt: str, already_written: set[str]) -> None:
         dependency = repo_objects.libs_by_name[dependency_name]
-        result.append(f'include "Lib{dependency.library}"')
+        if dependency.library != 'nolibrary' and dependency.library not in already_written:
+            result.append(fmt.format(dependency.library))
+            already_written.add(dependency.library)
+        for dependency_name in dependency.dependencies:
+            _write_dependency(dependency_name, fmt, already_written)
+    already_written = set()
+    for dependency_name in data.dependencies:
+        _write_dependency(dependency_name, 'include "Lib{}"', already_written)
+
     result.append('')
     result.append(f'include "Lib{data.library}_h"')
     result.append('')
@@ -1043,15 +1111,18 @@ def codegen_library(data: TriggerLib) -> str:
     result.append(f'// Library: {data.trigger_strings[library_string_key]}')
     result.append('//' + ('-' * 98))
     result.append('// External Library Initialization')
+
+    # init dependency libraries
     result.append(f'void lib{data.library}_InitLibraries () {{')
     result.append('    libNtve_InitVariables();')
+    already_written.clear()
     for dependency_name in data.dependencies:
         if dependency_name == 'ArchipelagoPatches':
             # Note(mm): This doesn't generate any variables right now
             # And I don't feel like parsing the whole thing every time to check it
             continue
-        dependency = repo_objects.libs_by_name[dependency_name]
-        result.append(f'    lib{dependency.library}_InitVariables();')
+        _write_dependency(dependency_name, '    lib{}_InitVariables();', already_written)
+    del already_written
     result.append('}')
     result.append('')
 
@@ -1160,4 +1231,5 @@ if __name__ == '__main__':
             print(codegen_library(ap_player), file=fp)
         write_triggers_xml(ap_triggers, 'out/aptriggers.xml')
         write_triggers_strings(ap_triggers, 'out/aptriggerstrings.txt')
+        write_trigger_headers_file(ap_triggers, 'out/aptriggers_h.galaxy')
 

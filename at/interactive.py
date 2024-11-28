@@ -227,6 +227,7 @@ def cmd_write(command: list[str], lib: TriggerLib) -> None:
         print(at.codegen_library(lib), file=fp)
     at.write_triggers_xml(lib, f'{target_dir}/Triggers.xml')
     at.write_triggers_strings(lib, f'{target_dir}/TriggerStrings.txt')
+    at.write_trigger_headers_file(lib, f'{target_dir}/lib_h.galaxy')
 
 
 def interactive(repo: RepoObjects) -> None:
