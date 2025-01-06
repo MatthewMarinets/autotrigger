@@ -231,6 +231,8 @@ def local_variable_name(data: TriggerLib, element: TriggerElement) -> str:
         identifier = data.id_to_string(element.element_id, element.type)
         assert identifier
         identifier = identifier[0].lower() + identifier[1:]
+    if identifier and identifier[0].isnumeric():
+        identifier = '_' + identifier
     return escape_identifier('lv_' + identifier)
 
 
