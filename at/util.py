@@ -13,3 +13,5 @@ def unescape_xml_string(string: str) -> str:
 def fix_bom(lines: list[str]) -> None:
     if lines and lines[0].startswith('ï»¿'):
         lines[0] = lines[0][len('ï»¿'):]
+    elif lines and lines[0].startswith('\ufeff'):
+        lines[0] = lines[0][len('\ufeff'):]

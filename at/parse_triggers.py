@@ -47,16 +47,31 @@ class ElementType(enum.StrEnum):
     PresetValue = 'PresetValue'
 
 
+def parse_attribute(line: str, attribute: str) -> str:
+    m = re.search(rf'\b{attribute}="([^"]+)"', line)
+    if m:
+        return m.group(1)
+    return ''
+
+
+
 class TriggerElement:
     __slots__ = (
         'lines',
         'type',
         'library',
         'element_id',
+        'disabled',
     )
     def __init__(self, lines: list[str], library: str) -> None:
         self.lines = lines
         self.library = library
+        self.disabled = False
+        for line in self.lines:
+            if line == '<Disabled/>':
+                self.disabled = True
+            elif line == '<Template/>':
+                self.disabled = True
         if self.lines[0] == '<Root>':
             self.type = ElementType.Root
             self.element_id: str = 'root'
@@ -91,8 +106,7 @@ class TriggerElement:
     def get_attribute(self, tag: str, attribute: str) -> str|None:
         for line in self.lines:
             if line.startswith(f'<{tag}'):
-                if m := re.search(rf'\b{attribute}="([^"]+)"', line):
-                    return m.group(1)
+                return parse_attribute(line, attribute)
         return None
     
     def get_first_line_of_tag(self, tag: str) -> str|None:

@@ -219,15 +219,23 @@ def cmd_write(command: list[str], lib: TriggerLib) -> None:
     lib.sort_elements()
     if len(command) < 2:
         target_dir = 'out'
+        trigger_ext = '.xml'
+        trigger_strings_path = ''
+        triggers_path = ''
     else:
         target_dir = command[1]
+        trigger_ext = ''
+        trigger_strings_path = '/enUS.SC2Data/LocalizedData'
+        triggers_path = '/Base.SC2Data'
+    if target_dir == '!':
+        target_dir = 'Mods/ArchipelagoTriggers.SC2Mod'
     print(f'Generating files to {target_dir}/')
     os.makedirs(target_dir, exist_ok=True)
-    with open(f'{target_dir}/lib.galaxy', 'w') as fp:
+    with open(f'{target_dir}{triggers_path}/lib{lib.library}.galaxy', 'w') as fp:
         print(at.codegen_library(lib), file=fp)
-    at.write_triggers_xml(lib, f'{target_dir}/Triggers.xml')
-    at.write_triggers_strings(lib, f'{target_dir}/TriggerStrings.txt')
-    at.write_trigger_headers_file(lib, f'{target_dir}/lib_h.galaxy')
+    at.write_triggers_xml(lib, f'{target_dir}/Triggers{trigger_ext}')
+    at.write_triggers_strings(lib, f'{target_dir}{trigger_strings_path}/TriggerStrings.txt')
+    at.write_trigger_headers_file(lib, f'{target_dir}{triggers_path}/lib{lib.library}_h.galaxy')
 
 
 def interactive(repo: RepoObjects) -> None:

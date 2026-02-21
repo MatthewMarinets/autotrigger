@@ -2,8 +2,7 @@
 Script for modifying `Trigger` files with unlock triggers,
 so we can update GUI triggers without having to put up with the editor.
 todo:
-* trigger conditions
-* What's going on with StringExternal vs StringToText("")
+* TextExpressionAssemble() can emit lines before the current line
 * Array assignments
 """
 
@@ -11,17 +10,31 @@ from typing import NamedTuple
 import re
 
 from autotrigger.at import tables
-from autotrigger.at.parse_triggers import ElementType, TriggerElement, TriggerLib, repo_objects, get_referenced_element, sort_elements
+from autotrigger.at.parse_triggers import (
+    ElementType, TriggerElement, TriggerLib,
+    repo_objects,
+    get_referenced_element,
+    sort_elements,
+    parse_attribute,
+)
 from autotrigger.at.util import unescape_xml_string
-
-
-_library_id_pattern = re.compile(r'Library="(\w+)" Id="([0-9A-F]{8})"')
 
 
 class AutoVariable(NamedTuple):
     name: str
     var_type: str
     constant: str|None = None
+
+
+class Patterns:
+    expression_part = re.compile(r'~([A-Z]+)~')
+    library_id = re.compile(r'Library="(\w+)" Id="([0-9A-F]{8})"')
+    param_def_id = re.compile(r'<ParameterDef Type="ParamDef" Library="\w+" Id="([0-9A-F]{8})"')
+    preset = re.compile(r'^<Preset Type="PresetValue" Library="(\w+)" Id="([0-9A-F]{8})"/>')
+    variable = re.compile(r'^<Variable Type="Variable" Library="(\w+)" Id="([0-9A-F]{8})"/>')
+    array = re.compile(r'<Array Type="Param" Library="(\w+)" Id="([0-9A-F]{8})"/>')
+    function_call = re.compile(r'^<FunctionCall Type="FunctionCall" Library="(\w+)" Id="([0-9A-F]{8})"/>')
+    value = re.compile(r'^<(ValueType|ValueId) (Type|Id)="(\w+)"')
 
 
 class AutoVarBuilder:
@@ -132,6 +145,8 @@ def write_trigger_headers_file(lib: TriggerLib, header_file: str) -> None:
         if functions:
             _print('// Function Declarations')
             for function in functions:
+                if function.disabled:
+                    continue
                 parameters = [child for child in lib.children[function] if child.type == ElementType.ParamDef]
                 parameter_types_names = [(get_variable_type(parameter), parameter_name(lib, parameter)) for parameter in parameters]
                 _print(
@@ -143,6 +158,8 @@ def write_trigger_headers_file(lib: TriggerLib, header_file: str) -> None:
         if triggers:
             _print('// Trigger Declarations')
             for trigger in triggers:
+                if trigger.disabled:
+                    continue
                 _print(f'trigger {trigger_name(lib, trigger)};')
             _print()
         if variables:
@@ -152,14 +169,18 @@ def write_trigger_headers_file(lib: TriggerLib, header_file: str) -> None:
 
 
 _type_map = {
-    'gamelink': 'string',
+    'actormsg': 'string',
+    'catalogentry': 'string',
+    'catalogfieldpath': 'string',
+    'charge': 'string',
+    'control': 'int',
+    'cooldown': 'string',
     'difficulty': 'int',
     'filepath': 'string',
-    'userinstance': 'string',
-    'actormsg': 'string',
-    'catalogfieldpath': 'string',
-    'userfield': 'string',
+    'gamelink': 'string',
     'layoutframe': 'string',
+    'userfield': 'string',
+    'userinstance': 'string',
 }
 
 
@@ -210,7 +231,7 @@ def parameter_name(data: TriggerLib, element: TriggerElement) -> str:
     if identifier := element.get_inline_value('Identifier'):
         return 'lp_' + identifier
     display_name = data.id_to_string(element.element_id, element.type)
-    assert display_name
+    assert display_name, (data.library, element.element_id, element.type)
     return escape_identifier('lp_' + display_name[0].lower() + display_name[1:].replace(' ', ''))
 
 
@@ -229,7 +250,7 @@ def local_variable_name(data: TriggerLib, element: TriggerElement) -> str:
     identifier = element.get_inline_value('Identifier')
     if identifier is None:
         identifier = data.id_to_string(element.element_id, element.type)
-        assert identifier
+        assert identifier, (data.library, element.element_id, element.type)
         identifier = identifier[0].lower() + identifier[1:]
     if identifier and identifier[0].isnumeric():
         identifier = '_' + identifier
@@ -325,19 +346,18 @@ def codegen_parameter(element: TriggerElement, auto_variables: AutoVarBuilder) -
     value_id = ''
     array_param = []
     expression = ''
-
-    _value_pattern = re.compile(r'^<(ValueType|ValueId) (Type|Id)="(\w+)"')
-    _variable_pattern = re.compile(r'^<Variable Type="Variable" Library="(\w+)" Id="([0-9A-F]{8})"/>')
-    _array_pattern = re.compile(r'<Array Type="Param" Library="(\w+)" Id="([0-9A-F]{8})"/>')
-    _function_call_pattern = re.compile(r'^<FunctionCall Type="FunctionCall" Library="(\w+)" Id="([0-9A-F]{8})"/>')
-    _preset_pattern = re.compile(r'^<Preset Type="PresetValue" Library="(\w+)" Id="([0-9A-F]{8})"/>')
+    expression_type = ''
+    parameter_def: TriggerElement | None = None
     in_script_code = False
+
     script_code_result: list[str] = []
     for line in element.lines:
         if line.startswith('<Value>'):
             value = unescape_xml_string(line[len('<Value>'):-len('</Value>')])
         elif line.startswith('<ExpressionText>'):
             expression = unescape_xml_string(line[len('<ExpressionText>'):-len('</ExpressionText>')])
+        elif line.startswith('<ExpressionType'):
+            expression_type = parse_attribute(line, 'Type')
         elif line == '<ScriptCode>':
             in_script_code = True
         elif line == '</ScriptCode>':
@@ -345,7 +365,7 @@ def codegen_parameter(element: TriggerElement, auto_variables: AutoVarBuilder) -
             return '\n'.join(script_code_result)
         elif in_script_code:
             script_code_result.append(unescape_xml_string(line))
-        elif m := re.match(_value_pattern, line):
+        elif m := re.match(Patterns.value, line):
             tag = m.group(1)
             if tag == 'ValueId':
                 value_id = m.group(3)
@@ -353,17 +373,17 @@ def codegen_parameter(element: TriggerElement, auto_variables: AutoVarBuilder) -
                 _type = _type_map.get(m.group(3), m.group(3))
             else:
                 assert False
-        elif m := re.match(_variable_pattern, line):
+        elif m := re.match(Patterns.variable, line):
             lib_id = m.group(1)
             var_id = m.group(2)
             assert lib_id != 'Ntve'
             lib = repo_objects.libs[lib_id]
             variable = variable_name(lib, lib.objects[var_id, ElementType.Variable])
-        elif m := re.match(_array_pattern, line):
+        elif m := re.match(Patterns.array, line):
             lib_id, param_id = m.groups()
             param_element = repo_objects.libs[lib_id].objects[param_id, ElementType.Param]
             array_param.append('[' + codegen_parameter(param_element, auto_variables) + ']')
-        elif m := re.match(_function_call_pattern, line):
+        elif m := re.match(Patterns.function_call, line):
             lib_id, function_call_id = m.groups()
             assert lib_id != 'Ntve'
             function_call_element = repo_objects.libs[lib_id].objects[function_call_id, ElementType.FunctionCall]
@@ -375,10 +395,13 @@ def codegen_parameter(element: TriggerElement, auto_variables: AutoVarBuilder) -
             if value_element.type == ElementType.Trigger:
                 return trigger_name(lib, value_element)
             elif value_element.type == ElementType.Preset:
-                if value_preset_line := element.get_first_line_of_tag('ValuePreset'):
-                    preset_value_lib, preset_value_element = get_referenced_element(value_preset_line)
-                    assert preset_value_element.type == ElementType.PresetValue
-                    return preset_value(preset_value_lib, preset_value_element)
+                if value_preset_lines := element.get_all_lines_of_tag('ValuePreset'):
+                    result = []
+                    for value_preset_line in value_preset_lines:
+                        preset_value_lib, preset_value_element = get_referenced_element(value_preset_line)
+                        assert preset_value_element.type == ElementType.PresetValue
+                        result.append(preset_value(preset_value_lib, preset_value_element))
+                    return ' | '.join(result)
                 elif base_type := value_element.get_attribute('BaseType', 'Value'):
                     default_result = tables.default_return_values.get(base_type)
                     if default_result:
@@ -386,19 +409,38 @@ def codegen_parameter(element: TriggerElement, auto_variables: AutoVarBuilder) -
                 return escape_identifier(lib.trigger_strings[f'{value_element.type}/Name/lib_{value_element.library}_{value_element.element_id}'])
             else:
                 assert False, f"Don't know how to handle ValueElement of type {value_element.type}"
-        elif m := re.match(_preset_pattern, line):
+        elif m := re.match(Patterns.preset, line):
             lib_id = m.group(1)
             preset_id = m.group(2)
             lib = repo_objects.libs[lib_id]
             return preset_value(lib, lib.objects[preset_id, ElementType.PresetValue])
         elif line.startswith('<Parameter Type="ParamDef"'):
-            m = _library_id_pattern.search(line)
+            m = Patterns.library_id.search(line)
             assert m
             lib_id, _id = m.groups()
             element = repo_objects.libs[lib_id].objects[_id, ElementType.ParamDef]
             return parameter_name(repo_objects.libs[lib_id], element)
+        elif line.startswith('<ParameterDef Type="ParamDef"'):
+            m = Patterns.library_id.search(line)
+            assert m
+            lib_id, _id = m.groups()
+            parameter_def = repo_objects.libs[lib_id].objects[_id, ElementType.ParamDef]
+    is_reference = False
+    reference_type = ''
+    if parameter_def:
+        is_reference = '<ParamFlagReference/>' in parameter_def.lines
+        if is_reference:
+            reference_type = parameter_def.get_attribute('Type', 'Value') or ''
+    if is_reference:
+        assert variable
+        if reference_type == 'unit':
+            return f'UnitRefFromVariable("{variable}")'
+        else:
+            return f'@reference:{reference_type}@'
     if _type == 'abilcmd':
         return f'AbilityCommand("{value}", {value_id or "0"})'
+    if _type == 'soundlink':
+        return f'SoundLink("{value}", {int(value_id) - 1})'
     if value_id:
         return value_id
     if _type == 'layoutframerel':
@@ -411,9 +453,7 @@ def codegen_parameter(element: TriggerElement, auto_variables: AutoVarBuilder) -
     if _type and _type == 'text':
         data = repo_objects.libs[element.library]
         key = f'{element.type}/Value/lib_{data.library}_{element.element_id}'
-        if key in data.trigger_strings:
-            return f'StringExternal("{key}")'
-        return 'StringToText("")'
+        return f'StringExternal("{key}")'
     if expression:
         lib = repo_objects.libs[element.library]
         children = lib.children[element]
@@ -422,11 +462,26 @@ def codegen_parameter(element: TriggerElement, auto_variables: AutoVarBuilder) -
             for child in children
             if child.type == ElementType.Param  # Note(mm): Technically, it's more correct to check the tag name is 'ExpressionParam'
         }
-        return '(' + re.sub(
-            r'~([A-Z]+)~',
-            lambda m: expression_to_child.get(m.group(1), m.group()),
-            expression,
-        ) + ')'
+        expression_parts = expression.split('~')
+        expression_result: list[str] = []
+        in_expression = True
+        has_printed = False
+        for expression_part in expression_parts:
+            in_expression = not in_expression
+            if not expression_part:
+                continue
+            if expression_type == 'string' and has_printed:
+                expression_result.append(' + ')
+            has_printed = True
+            if in_expression:
+                replacement = expression_to_child.get(expression_part, f'~{expression_part}~')
+                expression_result.append(replacement)
+            else:
+                if expression_type == 'string':
+                    expression_result.append(f'"{expression_part}"')
+                else:
+                    expression_result.append(expression_part)
+        return '(' + (''.join(expression_result)) + ')'
     if _type == 'string' and not value:
         return '""'
     if not value:
@@ -483,9 +538,8 @@ def codegen_function_info(data: TriggerLib, function_def_id: str) -> tuple[str, 
 
 def parameter_def_id(element: TriggerElement) -> str:
     assert element.type == ElementType.Param
-    param_def_pattern = re.compile(r'<ParameterDef Type="ParamDef" Library="\w+" Id="([0-9A-F]{8})"')
     for line in element.lines:
-        if m := re.match(param_def_pattern, line):
+        if m := re.match(Patterns.param_def_id, line):
             return m.group(1)
     assert False
 
@@ -576,9 +630,11 @@ def codegen_function_call(
     this_subfunc_order: int = 0,
     parent_trigger_name: str = 't',
 ) -> list[str]:
-    assert element.type == ElementType.FunctionCall
+    if element.type == ElementType.Comment:
+        return []
+    assert element.type == ElementType.FunctionCall, element.type
     data = repo_objects.libs[element.library]
-    if '<Disabled/>' in element.lines:
+    if element.disabled:
         return []
     function_def_line = element.get_first_line_of_tag('FunctionDef')
     if not function_def_line:
@@ -755,13 +811,13 @@ def codegen_function_call(
                     if not line:
                         should_print_line = False
             elif macro_name == 'PARAM':
-                assert len(macro_args) in (1, 2)
+                if len(macro_args) > 2:
+                    macro_args = [macro_args_str]
                 if macro_args[0] not in param_identifier_to_element:
                     line = line.replace(macro_match.group(), 'true')
                 else:
                     parameter_element = param_identifier_to_element[macro_args[0]]
                     if isinstance(parameter_element, TriggerElement):
-                        assert len(macro_args) == 1
                         line = line.replace(macro_match.group(), codegen_parameter(parameter_element, auto_variables))
                     else:
                         assert len(macro_args) == 2
@@ -771,7 +827,7 @@ def codegen_function_call(
             elif macro_name == 'IFHAVESUBFUNCS':
                 assert len(macro_args) == 2
                 subfunc_elements = subfunc_identifier_to_elements[macro_args[0]]
-                subfunc_elements = [subfunc_element for subfunc_element in subfunc_elements if '<Disabled/>' not in subfunc_element.lines]
+                subfunc_elements = [subfunc_element for subfunc_element in subfunc_elements if not subfunc_element.disabled]
                 if subfunc_elements:
                     line = line.replace(macro_match.group(), macro_args[1])
                 else:
@@ -866,7 +922,7 @@ def codegen_function_def(data: TriggerLib, element: TriggerElement) -> str:
         assert preset_element.type == ElementType.Preset
         return_type = preset_backing_type(preset_element)
 
-    if '<Disabled/>' in element.lines:
+    if element.disabled:
         return ''
 
     parameter_types_names = [(get_variable_type(parameter), parameter_name(data, parameter)) for parameter in parameters]
@@ -984,6 +1040,8 @@ def find_element_names(trigger_strings: list[str]
 def codegen_trigger(data: TriggerLib, trigger: TriggerElement) -> str:
     result: list[str] = []
     assert trigger.type == ElementType.Trigger
+    if trigger.disabled:
+        return ''
     variables = [child for child in data.children[trigger] if child.type == ElementType.Variable]
     event_lines = [line for line in trigger.lines if line.strip().startswith('<Event')]
     events = [get_referenced_element(line)[1] for line in event_lines]
@@ -1029,10 +1087,14 @@ def codegen_trigger(data: TriggerLib, trigger: TriggerElement) -> str:
     if conditions:
         _print('// Conditions')
         _print('if (testConds) {')
-        for element_index, element in enumerate(conditions):
-            if element_index:
+        has_printed = False
+        for element in conditions:
+            if has_printed:
                 _print()
             condition_result = codegen_function_call(element, automatic_variables)
+            if not condition_result:
+                continue
+            has_printed = True
             assert len(condition_result) == 1
             _print(f'    if (!({condition_result[0]})) {{')
             _print('        return false;')
@@ -1040,13 +1102,14 @@ def codegen_trigger(data: TriggerLib, trigger: TriggerElement) -> str:
         _print('}')
         _print()
 
-    if functions:
+    enabled_functions = [f for f in functions if not f.disabled]
+    if enabled_functions:
         _print('// Actions')
         _print('if (!runActions) {')
         _print('    return true;')
         _print('}')
         _print()
-    for function in functions:
+    for function in enabled_functions:
         lines = codegen_function_call(function, automatic_variables, end=';')
         indent, lines = indent_lines(lines, indent)
         result.extend(lines)
@@ -1181,12 +1244,14 @@ def codegen_library(data: TriggerLib) -> str:
     result.append('// Triggers')
     for element in triggers:
         trigger_result = codegen_trigger(data, element)
-        result.append(trigger_result)
+        if trigger_result:
+            result.append(trigger_result)
     
     if triggers:
         result.append(f'void lib{data.library}_InitTriggers () {{')
         for element in triggers:
-            result.append(f'    {trigger_name(data, element)}_Init();')
+            if not element.disabled:
+                result.append(f'    {trigger_name(data, element)}_Init();')
         result.append('}')
         result.append('')
 
